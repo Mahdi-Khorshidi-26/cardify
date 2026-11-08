@@ -10,6 +10,7 @@ Cardify is a [Claude Code](https://claude.com/claude-code) plugin. After each an
 | `- list` | green list card |
 | table | magenta table card |
 | code fence | yellow code card |
+| status words | colored badges: green (done, passed), red (failed, error), yellow (warning, pending) |
 
 ## Install
 
@@ -39,7 +40,7 @@ claude plugin test .
 
 ## Roadmap
 
-- Badges and stickers for status words (done, failed, warning)
+- More badge words and emoji stickers
 - Real markdown parser
 - Themes
 

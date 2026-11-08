@@ -47,6 +47,29 @@ export const parse = (md: string): Block[] => {
   return out
 }
 
+const BADGES: [RegExp, string][] = [
+  [/\b(done|passed?|ok|success|fixed|live|ready)\b/i, 'green'],
+  [/\b(fail(ed|ing)?|error|blocked|broken)\b/i, 'red'],
+  [/\b(warning|pending|todo|wip|not verified)\b/i, 'yellow'],
+]
+const BADGE = new RegExp(BADGES.map(([re]) => re.source).join('|'), 'gi')
+
+// Splits a string into plain runs and status-word runs that get a color.
+export const split = (s: string): { text: string; color?: string }[] => {
+  const out: { text: string; color?: string }[] = []
+  let at = 0
+
+  for (const m of s.matchAll(BADGE)) {
+    const color = BADGES.find(([re]) => re.test(m[0]))?.[1]
+    if (m.index > at) out.push({ text: s.slice(at, m.index) })
+    out.push({ text: m[0], color })
+    at = m.index + m[0].length
+  }
+  if (at < s.length) out.push({ text: s.slice(at) })
+
+  return out
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -74,6 +97,14 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const list = await read($, blocks)
+    const rich = (s: string) =>
+      split(s).map(r =>
+        r.color ? (
+          <Text bold color="black" backgroundColor={r.color}>{` ${r.text} `}</Text>
+        ) : (
+          <Text>{r.text}</Text>
+        ),
+      )
 
     if (list.length === 0) {
       return <Text dimColor>Nothing yet. Ask Claude something.</Text>
@@ -93,7 +124,7 @@ export const register: Register = on => {
             return (
               <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={1}>
                 {b.items.map(item => (
-                  <Text><Text color="green">● </Text>{item}</Text>
+                  <Text><Text color="green">● </Text>{rich(item)}</Text>
                 ))}
               </Box>
             )
@@ -103,7 +134,7 @@ export const register: Register = on => {
               <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1}>
                 <Text bold color="magenta">{b.head.join('  |  ')}</Text>
                 {b.rows.map(row => (
-                  <Text>{row.join('  |  ')}</Text>
+                  <Text>{row.map(rich).flatMap((c, i) => (i ? [<Text dimColor>{'  |  '}</Text>, ...c] : c))}</Text>
                 ))}
               </Box>
             )
@@ -115,7 +146,7 @@ export const register: Register = on => {
               </Box>
             )
           }
-          return <Text>{b.text}</Text>
+          return <Text>{rich(b.text)}</Text>
         })}
       </Box>
     )
