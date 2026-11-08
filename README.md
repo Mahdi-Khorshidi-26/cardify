@@ -10,11 +10,14 @@ Cardify is a [Claude Code](https://claude.com/claude-code) plugin. After each an
 
 | Markdown | Card |
 |---|---|
-| `# Heading` | cyan title card |
-| `- list` | green list card |
-| table | magenta table card |
-| code fence | yellow code card |
-| status words | colored badges: green (done, passed), red (failed, error), yellow (warning, pending) |
+| `# Heading` or a bold-only line | a section card, colored by its title |
+| list | rows with a marker, numbered when ordered |
+| table | aligned columns inside the section |
+| code fence | bordered code box |
+| `**bold**` and `` `code` `` | real bold and code chips |
+| status words in rows and cells | colored badges: green (done, passed), red (failed, error), yellow (warning, pending) |
+
+Section colors follow the heading: green for done, yellow for heads-up or not done, blue for next steps, gray for anything else.
 
 ## Install
 
