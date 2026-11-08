@@ -4,6 +4,10 @@ Turn Claude's answers into readable cards, tables and lists in a side pane.
 
 Cardify is a [Claude Code](https://claude.com/claude-code) plugin. After each answer it reads the markdown and draws it as colored cards:
 
+![Cardify preview](docs/preview.svg)
+
+*Illustrative mockup of the card styles.*
+
 | Markdown | Card |
 |---|---|
 | `# Heading` | cyan title card |
