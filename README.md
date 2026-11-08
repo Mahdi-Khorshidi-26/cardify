@@ -10,14 +10,17 @@ Cardify is a [Claude Code](https://claude.com/claude-code) plugin. After each an
 
 | Markdown | Card |
 |---|---|
-| `# Heading` or a bold-only line | a section card, colored by its title |
+| `# Heading` or a bold-only line | a section card, colored and stickered by its title |
 | list | rows with a marker, numbered when ordered |
-| table | aligned columns inside the section |
+| list of `Label: 72%` | a bar chart |
+| table | aligned columns, plus a bar chart when a column is numeric |
 | code fence | bordered code box |
-| `**bold**` and `` `code` `` | real bold and code chips |
-| status words in rows and cells | colored badges: green (done, passed), red (failed, error), yellow (warning, pending) |
+| `**bold**`, `` `code` ``, URLs | real bold, code chips, clickable links |
+| status words in rows and cells | sticker badges: ✅ done, ❌ failed, ⚠️ pending, 💡 note, 🧪 beta |
+| list under "Next steps", "Options" | buttons that send the item back to Claude |
+| section titled "Questions" | an input box that sends your answer back to Claude |
 
-Section colors follow the heading: green for done, yellow for heads-up or not done, blue for next steps, gray for anything else.
+Section colors follow the heading: green for done, yellow for heads-up or not done, blue for next steps, magenta for questions, cyan for tips, gray for anything else.
 
 ## Install
 
@@ -40,6 +43,8 @@ Replies with headings, lists, tables or code fences are redrawn as cards right i
 
 Run `/cardify` to open a side pane that keeps the latest answer as cards.
 
+Switch inline cards with `/cardify off` and `/cardify on`. The switch lasts for the session.
+
 ## Develop
 
 ```bash
@@ -50,7 +55,6 @@ claude plugin test .
 
 ## Roadmap
 
-- More badge words and emoji stickers
 - Real markdown parser
 - Themes
 

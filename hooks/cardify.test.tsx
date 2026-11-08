@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { group, parse, split, tone } from './register'
+import { group, listChart, parse, split, tableChart, tone } from './register'
 
 test('split colors status words', () => {
   const runs = split('Build passed, deploy FAILED')
@@ -60,4 +60,70 @@ test('plain prose is left to the engine', async ($, on) => {
 
   expect((await ui.find({ type: 'Text', text: /engine/ }))?.text).toBe('engine')
   await ui.unmount()
+})
+
+test('status words get a color and a sticker', () => {
+  const runs = split('Tests passed, tip: retry, beta')
+
+  expect(runs.filter(r => r.emoji).map(r => [r.text, r.emoji])).toEqual([
+    ['passed', '✅'],
+    ['tip', '💡'],
+    ['beta', '🧪'],
+  ])
+})
+
+test('numeric tables and "label: value" lists become bars', () => {
+  const t = tableChart(['Step', 'Time'], [['a', '10s'], ['b', '20s']])
+
+  expect(t?.title).toBe('Time')
+  expect(t?.data.map(d => d.bar.replace(/░/g, '').length)).toEqual([8, 16])
+  expect(tableChart(['A', 'B'], [['x', 'yes'], ['y', 'no']])).toBeUndefined()
+
+  expect(listChart(['CPU: 75%', 'Memory: 25%'])?.map(d => d.bar.replace(/░/g, '').length)).toEqual([12, 4])
+  expect(listChart(['one', 'two'])).toBeUndefined()
+})
+
+test('next steps are buttons and questions are inputs', () => {
+  expect(tone('Next steps').act).toBe('button')
+  expect(tone('Questions for you').act).toBe('input')
+  expect(tone('Done').act).toBeUndefined()
+})
+
+test('a button sends its step as a prompt and an input sends its text', async ($, on) => {
+  const sent: string[] = []
+  on('prompt.submit', (_, e) => {
+    sent.push(e.text)
+
+    return {} as never
+  })
+
+  const steps = await $.ui.mount({ ...reply('**Next steps**\n- Push the fix'), surface: 'desktop' })
+  await steps.press({ key: 'cardify-0-0-0' })
+  await steps.unmount()
+
+  const ask = await $.ui.mount({ ...reply('**Questions**\n- Which one?'), surface: 'desktop' })
+  await ask.input({ plugin: 'cardify', key: 'cardify-0-ask', text: 'the first' })
+  await ask.unmount()
+
+  expect(sent).toEqual(['Go ahead with: Push the fix', 'the first'])
+})
+
+test('/cardify off hands replies back to the engine', async ($, on) => {
+  on('command.register', () => ({ value: { command: 'cardify' } }))
+  on('prompt.submit', () => ({}) as never)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>engine</Text>
+  })
+
+  await $.command.run({ command: 'cardify', args: 'off', origin: { kind: 'composer' }, presentation: {} } as never)
+  const off = await $.ui.mount({ ...reply('**Done**\n- x'), surface: 'desktop' })
+  expect((await off.find({ type: 'Text', text: /engine/ }))?.text).toBe('engine')
+  await off.unmount()
+
+  await $.command.run({ command: 'cardify', args: 'on', origin: { kind: 'composer' }, presentation: {} } as never)
+  const on2 = await $.ui.mount({ ...reply('**Done**\n- x'), surface: 'desktop' })
+  expect((await on2.find({ type: 'Text', text: /Done/ }))?.text).toContain('Done')
+  await on2.unmount()
 })
