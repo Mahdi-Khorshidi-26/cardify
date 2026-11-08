@@ -27,10 +27,10 @@ test('a bold-only line is a heading and a numbered list is ordered', () => {
 })
 
 test('headings pick a tone and start a section', () => {
-  expect(tone('What I did').color).toBe('green')
-  expect(tone('Not done yet').color).toBe('yellow')
-  expect(tone('Next steps').color).toBe('blue')
-  expect(tone('Misc').color).toBe('gray')
+  expect(tone('What I did').tone).toBe('ok')
+  expect(tone('Not done yet').tone).toBe('warn')
+  expect(tone('Next steps').tone).toBe('next')
+  expect(tone('Misc').tone).toBe('note')
 
   const sections = group(parse('intro\n\n**Done**\n- a\n\n**Heads-up**\nb'))
 
@@ -76,10 +76,10 @@ test('numeric tables and "label: value" lists become bars', () => {
   const t = tableChart(['Step', 'Time'], [['a', '10s'], ['b', '20s']])
 
   expect(t?.title).toBe('Time')
-  expect(t?.data.map(d => d.bar.replace(/░/g, '').length)).toEqual([8, 16])
+  expect(t?.data.map(d => d.bar.replace(/░/g, '').length)).toEqual([10, 20])
   expect(tableChart(['A', 'B'], [['x', 'yes'], ['y', 'no']])).toBeUndefined()
 
-  expect(listChart(['CPU: 75%', 'Memory: 25%'])?.map(d => d.bar.replace(/░/g, '').length)).toEqual([12, 4])
+  expect(listChart(['CPU: 75%', 'Memory: 25%'])?.map(d => d.bar.replace(/░/g, '').length)).toEqual([15, 5])
   expect(listChart(['one', 'two'])).toBeUndefined()
 })
 
@@ -191,4 +191,50 @@ test('the system prompt gains the ui language, only where something draws', asyn
 
   expect(drawn.sections.map(s => s.id)).toEqual(['cardify:ui'])
   expect(headless.sections).toEqual([])
+})
+
+test('cards, kv, progress and timeline parse, and [tone: text] cells are pills', () => {
+  const segs = parseUi(
+    `${F}ui\ncards: Companies\n- 🍎 Apple | AAPL | Services | ok\nkv: Apple\n- Ticker | AAPL\nprogress: Rollout\n- EU | 140\ntimeline: History\n- 1976 | Founded\n${F}`,
+  )
+
+  expect(segs).toEqual([
+    { kind: 'cards', title: 'Companies', items: [{ title: '🍎 Apple', sub: 'AAPL', body: 'Services', tone: 'ok' }] },
+    { kind: 'kv', title: 'Apple', items: [{ key: 'Ticker', value: 'AAPL' }] },
+    { kind: 'progress', title: 'Rollout', items: [{ label: 'EU', pct: 100 }] },
+    { kind: 'timeline', title: 'History', items: [{ when: '1976', what: 'Founded' }] },
+  ])
+})
+
+const RICH = `${F}ui\ncards: Companies\n- 🍎 Apple | AAPL | Services | ok\nkv: Apple\n- Ticker | AAPL\nprogress: Rollout\n- EU | 40\ntimeline: History\n- 1976 | Founded\ntable: Co | Status\n- Apple | [ok: Public]\n${F}`
+
+test('the new components draw on every surface', async $ => {
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...reply(RICH), surface })
+
+    expect((await ui.find({ type: 'Text', text: /Founded/ }))?.text).toContain('Founded')
+    expect((await ui.find({ type: 'Text', text: /Public/ }))?.text).toContain('Public')
+    expect((await ui.find({ type: 'Text', text: /40%/ }))?.text).toContain('40%')
+    await ui.unmount()
+  }
+})
+
+test('an ask sends once, then says what it sent', async ($, on) => {
+  const sent: string[] = []
+  on('prompt.submit', (_, e) => {
+    sent.push(e.text)
+
+    return {} as never
+  })
+
+  const text = `${F}ui\nask: Which stocks?\n${F}`
+  const ui = await $.ui.mount({ ...reply(text), surface: 'desktop' })
+  await ui.input({ plugin: 'cardify', key: 'cardify-ui-0-ask', text: 'Apple' })
+  await ui.unmount()
+
+  const again = await $.ui.mount({ ...reply(text), surface: 'desktop' })
+  expect((await again.find({ type: 'Text', text: /Sent/ }))?.text).toBe('✓ Sent: Apple')
+  await again.unmount()
+
+  expect(sent).toEqual(['Apple'])
 })

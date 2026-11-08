@@ -1,17 +1,46 @@
 import { atom, read, update } from 'claude-code'
-import type { ElementTable, Register } from 'claude-code'
+import type { ElementTable, EngineInterface, Register } from 'claude-code'
 
 import type { Block } from '../types'
 
 const PANE = 'cardify'
 // Change a tag when its value's shape changes: it declines what an earlier version stored.
-const latest = atom({ plugin: 'cardify', key: 'latest' } as const, '', {
-  shape: 'latest-1',
-})
+const latest = atom({ plugin: 'cardify', key: 'latest' } as const, '', { shape: 'latest-1' })
 // ponytail: session-only switch. Move it to $.store if it should survive a restart.
-const isOn = atom({ plugin: 'cardify', key: 'isOn' } as const, true, {
-  shape: 'on-1',
-})
+const isOn = atom({ plugin: 'cardify', key: 'isOn' } as const, true, { shape: 'on-1' })
+// What each ask or button already sent, so a card shows "Sent" and can't send twice. ponytail: grows for the session.
+const sent = atom({ plugin: 'cardify', key: 'sent' } as const, {} as Record<string, string>, { shape: 'sent-1' })
+
+// ---- Look: cards are dark panels with their own text color, so they read the same on a light or dark theme.
+
+const C = {
+  panel: '#161b22',
+  raised: '#1c2128',
+  head: '#21262d',
+  line: '#30363d',
+  text: '#e6edf3',
+  dim: '#8b949e',
+  hero: '#1a2142',
+  heroLine: '#3d4f9f',
+  ink: '#0d1117',
+}
+
+type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'next' | 'ask' | 'note'
+const TONE: Record<Tone, { color: string; bg: string; icon: string }> = {
+  ok: { color: '#3fb950', bg: '#0f2419', icon: '✅' },
+  warn: { color: '#d29922', bg: '#2a2010', icon: '⚠️' },
+  bad: { color: '#f85149', bg: '#2c1416', icon: '❌' },
+  info: { color: '#39c5cf', bg: '#0d2229', icon: '💡' },
+  next: { color: '#58a6ff', bg: '#0d1b30', icon: '👉' },
+  ask: { color: '#db61a2', bg: '#2a1226', icon: '❓' },
+  note: { color: '#8b949e', bg: '#161b22', icon: '📌' },
+}
+const asTone = (s: string | undefined, fallback: Tone = 'info'): Tone =>
+  s && s.trim().toLowerCase() in TONE ? (s.trim().toLowerCase() as Tone) : fallback
+
+const BAR = 20
+
+// ---- Markdown fallback: replies without a ui block still get cards from their structure.
 
 const cells = (line: string) =>
   line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim())
@@ -66,6 +95,7 @@ const BADGES: [RegExp, string, string][] = [
   [/\b(beta|experimental)\b/i, 'magenta', '🧪'],
 ]
 const BADGE = new RegExp(BADGES.map(([re]) => re.source).join('|'), 'gi')
+const BADGE_TONE: Record<string, Tone> = { green: 'ok', red: 'bad', yellow: 'warn', cyan: 'info', magenta: 'ask' }
 
 // Splits a string into plain runs and status-word runs that get a color and a sticker.
 export const split = (s: string): { text: string; color?: string; emoji?: string }[] => {
@@ -88,15 +118,15 @@ export const isStructured = (list: Block[]) => list.some(b => b.kind !== 'text')
 
 type Act = 'button' | 'input'
 
-// A section card's color, sticker and behavior come from its heading. The first match wins, so "Not done yet" is a warning.
-const TONES: { re: RegExp; color: string; icon: string; act?: Act }[] = [
-  { re: /heads-up|warning|caveat|risk|not done|not yet|still open|bug|problem|issue|gap|unverified/i, color: 'yellow', icon: '⚠️' },
-  { re: /question|your answer|reply|tell me|input/i, color: 'magenta', icon: '❓', act: 'input' },
-  { re: /option|choose|pick|which|next|todo|to do|steps?|follow/i, color: 'blue', icon: '👉', act: 'button' },
-  { re: /done|did|fixed|result|change|added|built|works|checks?|summary|what.s in/i, color: 'green', icon: '✅' },
-  { re: /tip|note|info|why|idea|background|context/i, color: 'cyan', icon: '💡' },
+// A section card's tone and behavior come from its heading. The first match wins, so "Not done yet" is a warning.
+const TONES: { re: RegExp; tone: Tone; act?: Act }[] = [
+  { re: /heads-up|warning|caveat|risk|not done|not yet|still open|bug|problem|issue|gap|unverified/i, tone: 'warn' },
+  { re: /question|your answer|reply|tell me|input/i, tone: 'ask', act: 'input' },
+  { re: /option|choose|pick|which|next|todo|to do|steps?|follow/i, tone: 'next', act: 'button' },
+  { re: /done|did|fixed|result|change|added|built|works|checks?|summary|what.s in/i, tone: 'ok' },
+  { re: /tip|note|info|why|idea|background|context/i, tone: 'info' },
 ]
-export const tone = (title: string) => TONES.find(t => t.re.test(title)) ?? { color: 'gray', icon: '📌', act: undefined }
+export const tone = (title: string): { tone: Tone; act?: Act } => TONES.find(t => t.re.test(title)) ?? { tone: 'note' }
 
 type Section = { title?: string; body: Block[] }
 
@@ -121,12 +151,12 @@ export const group = (list: Block[]): Section[] => {
   return out
 }
 
-type Bar = { label: string; raw: string; bar: string }
+type Bar = { label: string; raw: string; bar: string; n: number }
 
 const NUM = /^~?[$€£]?-?\d[\d,]*(\.\d+)?\s*(%|k|m|ms|s|x|[a-z]{1,2})?$/i
 const num = (s: string) => Number(s.replace(/[^\d.-]/g, ''))
 
-// Scales values to a bar of 16 cells; percentages scale to 100.
+// Scales values to a bar of BAR cells; percentages scale to 100.
 const bars = (rows: { label: string; raw: string }[]): Bar[] | undefined => {
   const vals = rows.map(r => num(r.raw))
   if (rows.length < 2 || vals.some(Number.isNaN)) return undefined
@@ -134,9 +164,9 @@ const bars = (rows: { label: string; raw: string }[]): Bar[] | undefined => {
   const top = Math.max(...vals.map(Math.abs), rows.every(r => r.raw.includes('%')) ? 100 : 1)
 
   return rows.map((r, i) => {
-    const n = Math.round((Math.max(vals[i] ?? 0, 0) / top) * 16)
+    const n = Math.round((Math.max(vals[i] ?? 0, 0) / top) * BAR)
 
-    return { ...r, bar: '█'.repeat(n) + '░'.repeat(16 - n) }
+    return { ...r, n, bar: '█'.repeat(n) + '░'.repeat(BAR - n) }
   })
 }
 
@@ -156,102 +186,169 @@ export const listChart = (items: string[]) => {
   return ok ? bars(parsed.map(m => ({ label: m?.[1] ?? '', raw: m?.[2] ?? '' }))) : undefined
 }
 
-type T = Pick<ElementTable, 'Box' | 'Text' | 'Button' | 'Link' | 'Markdown'> & { Input?: ElementTable<'desktop'>['Input'] }
-type Send = (text: string) => void
+// ---- Interaction: an ask or a button sends once, as the person, and its card then says what it sent.
 
-// A press or Enter submits as the person; a refused submit (busy session) must not throw inside a handler.
-const sender = ($: { prompt: { submit: (a: { text: string; asUser: true }) => Promise<unknown> } }): Send => text => {
-  $.prompt.submit({ text, asUser: true }).catch(() => {})
+type Io = { send: (key: string, text: string) => void; sentOf: (key: string) => string | undefined }
+
+// A message's own id: the same text in the pane and the transcript shares what it sent.
+export const hash = (s: string) => {
+  let n = 5381
+  for (let i = 0; i < s.length; i++) n = ((n << 5) + n + s.charCodeAt(i)) | 0
+
+  return (n >>> 0).toString(36)
 }
 
-// Inline **bold**, `code` and links. Status badges only where asked: rows and cells, never prose.
-const rich = ({ Text, Link }: T, s: string, hasBadges: boolean) =>
-  s.split(/(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s)]+)/).filter(Boolean).flatMap(part => {
-    if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
-      return [<Text bold>{part.slice(2, -2)}</Text>]
-    }
-    if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
-      return [<Text color="#e6edf3" backgroundColor="#30363d">{` ${part.slice(1, -1)} `}</Text>]
-    }
-    if (/^https?:\/\//.test(part)) return [<Link href={part} />]
-    if (!hasBadges) return [<Text>{part}</Text>]
+// Guards a double Enter, or Enter then the send button, before the redraw lands. ponytail: module memory, cleared on reload.
+const fired = new Set<string>()
 
-    return split(part).map(r =>
-      r.color ? (
-        <Text bold color="black" backgroundColor={r.color}>{` ${r.emoji} ${r.text} `}</Text>
-      ) : (
-        <Text>{r.text}</Text>
-      ),
-    )
-  })
+const ioFor = async ($: EngineInterface, text: string): Promise<Io> => {
+  const id = hash(text)
+  const done = await read($, sent)
 
-const chartRows = ({ Box, Text }: T, data: Bar[], color: string) => (
-  <Box flexDirection="column">
-    {data.map(d => (
-      <Text>
-        <Text>{d.label.padEnd(Math.max(...data.map(x => x.label.length)))}</Text>
-        <Text color={color}>{`  ${d.bar}  `}</Text>
-        <Text bold>{d.raw}</Text>
-      </Text>
-    ))}
+  return {
+    sentOf: key => done[`${id}:${key}`],
+    send: (key, said) => {
+      const k = `${id}:${key}`
+      if (fired.has(k) || done[k]) return
+      fired.add(k)
+      void update($, sent, m => ({ ...m, [k]: said }))
+      // A refused submit (busy session) must not throw inside a handler.
+      $.prompt.submit({ text: said, asUser: true }).catch(() => {})
+    },
+  }
+}
+
+// ---- Drawing
+
+// Y is the vertical spacing step: 0 on the terminal (a cell is a whole line), 1 on graphical surfaces.
+type T = Pick<ElementTable, 'Box' | 'Text' | 'Button' | 'Link' | 'Markdown'> & { Input?: ElementTable<'desktop'>['Input']; Y: number }
+
+const pill = ({ Text }: T, tn: Tone, text: string) => (
+  <Text bold color={TONE[tn].color} backgroundColor={TONE[tn].bg}>{` ${text} `}</Text>
+)
+
+// Inline **bold**, `code`, links and [tone: pills]. Status-word badges only where asked: rows and cells, never prose.
+const rich = (t: T, s: string, hasBadges: boolean) => {
+  const { Text, Link } = t
+
+  return s
+    .split(/(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s)]+|\[(?:ok|warn|bad|info|next|ask|note):[^\]]+\])/)
+    .filter(Boolean)
+    .flatMap(part => {
+      if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
+        return [<Text bold>{part.slice(2, -2)}</Text>]
+      }
+      if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
+        return [<Text color={C.text} backgroundColor={C.line}>{` ${part.slice(1, -1)} `}</Text>]
+      }
+      if (/^https?:\/\//.test(part)) return [<Link href={part} />]
+
+      const tag = /^\[(\w+):\s*([^\]]+)\]$/.exec(part)
+      if (tag) return [pill(t, asTone(tag[1]), (tag[2] ?? '').trim())]
+      if (!hasBadges) return [<Text>{part}</Text>]
+
+      return split(part).map(r =>
+        r.color ? pill(t, BADGE_TONE[r.color] ?? 'info', `${r.emoji} ${r.text}`) : <Text>{r.text}</Text>,
+      )
+    })
+}
+
+const plain = (s: string) => s.replace(/\*\*|`|\[\w+:\s*|\]/g, '')
+
+type El = ReturnType<typeof rich>[number]
+
+// A tinted panel: the shared shape of every card.
+const card = ({ Box, Text, Y }: T, tn: Tone, title: string | undefined, kids: (El | null)[]) => (
+  <Box flexDirection="column" gap={Y} backgroundColor={TONE[tn].bg} borderStyle="round" borderColor={TONE[tn].color} paddingX={2} paddingY={Y}>
+    {title ? <Text bold color={TONE[tn].color}>{title}</Text> : null}
+    {kids}
   </Box>
 )
 
-const plain = (s: string) => s.replace(/\*\*|`/g, '')
+// A bar: a filled run and its track, drawn as colored cells.
+const meter = ({ Text }: T, n: number, color: string) => (
+  <Text>
+    <Text backgroundColor={color}>{' '.repeat(n)}</Text>
+    <Text backgroundColor={C.line}>{' '.repeat(Math.max(BAR - n, 0))}</Text>
+  </Text>
+)
 
-// A real table: fixed-width cells (in character cells, same on every surface), a header row and striped rows.
-const grid = (t: T, head: string[], rows: string[][], color: string) => {
-  const { Box, Text } = t
-  const widths = head.map((label, c) => Math.min(30, Math.max(label.length, ...rows.map(r => plain(r[c] ?? '').length))) + 2)
+const chartRows = (t: T, data: Bar[], color: string) => {
+  const { Box, Text, Y } = t
+  const w = Math.max(...data.map(d => d.label.length)) + 1
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={color}>
-      <Box backgroundColor="#30363d">
-        {head.map((label, c) => (
-          <Box width={widths[c] ?? 12} paddingX={1}>
-            <Text bold color="#e6edf3">{label}</Text>
+    <Box flexDirection="column" gap={Y}>
+      {data.map(d => (
+        <Box gap={1}>
+          <Box width={w}>
+            <Text color={C.text}>{d.label}</Text>
           </Box>
-        ))}
-      </Box>
-      {rows.map((row, i) => (
-        <Box backgroundColor={i % 2 ? '#161b22' : undefined}>
-          {head.map((_, c) => (
-            <Box width={widths[c] ?? 12} paddingX={1}>
-              <Text>{rich(t, row[c] ?? '', true)}</Text>
-            </Box>
-          ))}
+          {meter(t, d.n, color)}
+          <Text bold color={C.text}>{d.raw}</Text>
         </Box>
       ))}
     </Box>
   )
 }
 
-type Ctx = { t: T; gap: number; color: string; act?: Act; send: Send; id: string }
+// A real table: fixed-width cells (character cells, the same on every surface), a header band, striped rows,
+// numbers right-aligned and the first column bold.
+const grid = (t: T, head: string[], rows: string[][]) => {
+  const { Box, Text, Y } = t
+  const isNum = head.map((_, c) => rows.length > 0 && rows.every(r => NUM.test(plain(r[c] ?? ''))))
+  const widths = head.map((label, c) => Math.min(32, Math.max(label.length, ...rows.map(r => plain(r[c] ?? '').length))) + 4)
+  const cell = (c: number, kid: El) => (
+    <Box width={widths[c] ?? 14} paddingX={2} justifyContent={isNum[c] ? 'flex-end' : 'flex-start'}>
+      {kid}
+    </Box>
+  )
 
-const body = (list: Block[], { t, gap, color, act, send, id }: Ctx) => {
-  const { Box, Text, Button, Input } = t
+  return (
+    <Box flexDirection="column" backgroundColor={C.panel} borderStyle="round" borderColor={C.line}>
+      <Box backgroundColor={C.head} paddingY={Y}>
+        {head.map((label, c) => cell(c, <Text bold color={C.dim}>{label}</Text>))}
+      </Box>
+      {rows.map((row, i) => (
+        <Box backgroundColor={i % 2 ? C.raised : C.panel} paddingY={Y}>
+          {head.map((_, c) => cell(c, <Text color={C.text} bold={c === 0}>{rich(t, row[c] ?? '', true)}</Text>))}
+        </Box>
+      ))}
+    </Box>
+  )
+}
 
-  const out = list.map((b, n) => {
+const sentNote = ({ Text }: T, said: string) => <Text bold color={TONE.ok.color}>{`✓ Sent: ${said}`}</Text>
+
+type Ctx = { t: T; tn: Tone; act?: Act; io: Io; id: string }
+
+const body = (list: Block[], { t, tn, act, io, id }: Ctx) => {
+  const { Box, Text, Button, Input, Y } = t
+  const color = TONE[tn].color
+
+  const out: (El | null)[] = list.map((b, n) => {
     if (b.kind === 'list') {
       const data = listChart(b.items)
 
       if (data) return chartRows(t, data, color)
       if (act === 'button') {
-        return (
-          <Box flexDirection="column" gap={gap}>
+        const done = b.items.map((_, i) => io.sentOf(`${id}-${n}-${i}`)).find(Boolean)
+
+        return done ? sentNote(t, done) : (
+          <Box gap={1} flexWrap="wrap">
             {b.items.map((item, i) => (
-              <Button key={`${id}-${n}-${i}`} label={plain(item)} onPress={() => send(`Go ahead with: ${plain(item)}`)} />
+              <Button key={`${id}-${n}-${i}`} label={plain(item)} onPress={() => io.send(`${id}-${n}-${i}`, `Go ahead with: ${plain(item)}`)} />
             ))}
           </Box>
         )
       }
 
       return (
-        <Box flexDirection="column" gap={gap}>
+        <Box flexDirection="column" gap={Y}>
           {b.items.map((item, i) => (
             <Box gap={1}>
               <Text bold color={color}>{b.ordered ? `${i + 1}.` : '•'}</Text>
-              <Text>{rich(t, item, true)}</Text>
+              <Text color={C.text}>{rich(t, item, true)}</Text>
             </Box>
           ))}
         </Box>
@@ -261,46 +358,44 @@ const body = (list: Block[], { t, gap, color, act, send, id }: Ctx) => {
       const chart = tableChart(b.head, b.rows)
 
       return (
-        <Box flexDirection="column" gap={1}>
-          {grid(t, b.head, b.rows, color)}
-          {chart && (
-            <Box flexDirection="column">
-              <Text dimColor>{chart.title}</Text>
+        <Box flexDirection="column" gap={Y}>
+          {grid(t, b.head, b.rows)}
+          {chart ? (
+            <Box flexDirection="column" gap={Y}>
+              <Text color={C.dim}>{chart.title}</Text>
               {chartRows(t, chart.data, color)}
             </Box>
-          )}
+          ) : null}
         </Box>
       )
     }
     if (b.kind === 'code') {
       return (
-        <Box borderStyle="round" borderColor="gray" paddingX={1}>
-          <Text>{b.text}</Text>
+        <Box backgroundColor={C.ink} borderStyle="round" borderColor={C.line} paddingX={2}>
+          <Text color={C.text}>{b.text}</Text>
         </Box>
       )
     }
 
-    return <Text>{rich(t, b.text, false)}</Text>
+    return <Text color={C.text}>{rich(t, b.text, false)}</Text>
   })
 
   if (act === 'input' && Input) {
+    const done = io.sentOf(`${id}-ask`)
+
     out.push(
-      <Input
-        key={`${id}-ask`}
-        placeholder="Type your answer"
-        submitLabel="send"
-        onSubmit={v => v.trim() && send(v.trim())}
-      />,
+      done ? sentNote(t, done) : (
+        <Input key={`${id}-ask`} placeholder="Type your answer" submitLabel="send" onSubmit={v => v.trim() && io.send(`${id}-ask`, v.trim())} />
+      ),
     )
   }
 
   return out
 }
 
-// One drawing for the pane and the transcript, on any surface that has Box and Text.
-const draw = (list: Block[], t: T, surface: string, send: Send) => {
-  const { Box, Text } = t
-  const gap = surface === 'terminal' ? 0 : 1
+// The markdown fallback's drawing: a tinted card per section.
+const draw = (list: Block[], t: T, io: Io) => {
+  const { Box, Y } = t
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -308,33 +403,17 @@ const draw = (list: Block[], t: T, surface: string, send: Send) => {
         const id = `cardify-${i}`
 
         if (s.title === undefined) {
-          return <Box flexDirection="column" gap={1}>{body(s.body, { t, gap, color: 'gray', send, id })}</Box>
+          return <Box flexDirection="column" gap={Y}>{body(s.body, { t, tn: 'note', io, id })}</Box>
         }
-        const { color, icon, act } = tone(s.title)
+        const { tone: tn, act } = tone(s.title)
 
-        return (
-          <Box flexDirection="column" gap={1} borderStyle="round" borderColor={color} paddingX={1}>
-            <Text bold color={color}>{`${icon} ${s.title}`}</Text>
-            {body(s.body, { t, gap, color, act, send, id })}
-          </Box>
-        )
+        return card(t, tn, `${TONE[tn].icon} ${s.title}`, body(s.body, { t, tn, act, io, id }))
       })}
     </Box>
   )
 }
 
-
 // ---- The ui block language: Claude writes it, Cardify draws it. Like OpenUI, but a few lines per component.
-
-type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'next'
-const TONE: Record<Tone, { color: string; icon: string }> = {
-  ok: { color: 'green', icon: '✅' },
-  warn: { color: 'yellow', icon: '⚠️' },
-  bad: { color: 'red', icon: '❌' },
-  info: { color: 'cyan', icon: '💡' },
-  next: { color: 'blue', icon: '👉' },
-}
-const asTone = (s?: string): Tone => (s && s in TONE ? s : 'info') as Tone
 
 export type Ui =
   | { kind: 'md'; text: string }
@@ -347,8 +426,12 @@ export type Ui =
   | { kind: 'buttons'; title: string; items: { label: string; prompt?: string }[] }
   | { kind: 'ask'; question: string }
   | { kind: 'badges'; items: { text: string; tone: Tone }[] }
+  | { kind: 'cards'; title: string; items: { title: string; sub?: string; body?: string; tone: Tone }[] }
+  | { kind: 'kv'; title: string; items: { key: string; value: string }[] }
+  | { kind: 'progress'; title: string; items: { label: string; pct: number }[] }
+  | { kind: 'timeline'; title: string; items: { when: string; what: string }[] }
 
-const NAME = /^(title|callout|stats|table|bars|list|steps|buttons|ask|badges)(?:\s+(\w+))?\s*:\s*(.*)$/i
+const NAME = /^(title|callout|stats|table|bars|list|steps|buttons|ask|badges|cards|kv|progress|timeline)(?:\s+(\w+))?\s*:\s*(.*)$/i
 const parts = (s: string) => s.split('|').map(p => p.trim())
 
 const component = (name: string, tag: string | undefined, head: string, rows: string[][]): Ui | undefined => {
@@ -375,7 +458,15 @@ const component = (name: string, tag: string | undefined, head: string, rows: st
     case 'ask':
       return { kind: 'ask', question: head }
     case 'badges':
-      return { kind: 'badges', items: rows.map(([text = '', tone]) => ({ text, tone: asTone(tone) })) }
+      return { kind: 'badges', items: rows.map(([text = '', tn]) => ({ text, tone: asTone(tn) })) }
+    case 'cards':
+      return { kind: 'cards', title: head, items: rows.map(([title = '', sub, body, tn]) => ({ title, sub, body, tone: asTone(tn, 'note') })) }
+    case 'kv':
+      return { kind: 'kv', title: head, items: rows.map(([key = '', ...value]) => ({ key, value: value.join(' | ') })) }
+    case 'progress':
+      return { kind: 'progress', title: head, items: rows.map(([label = '', raw = '']) => ({ label, pct: Math.min(Math.max(num(raw) || 0, 0), 100) })) }
+    case 'timeline':
+      return { kind: 'timeline', title: head, items: rows.map(([when = '', ...what]) => ({ when, what: what.join(' | ') })) }
     default:
       return undefined
   }
@@ -451,12 +542,21 @@ export const toMarkdown = (segs: Ui[]) =>
           return `**${u.question}**`
         case 'badges':
           return u.items.map(i => `\`${i.text}\``).join(' ')
+        case 'cards':
+          return `**${u.title}**\n${u.items.map(c => `- **${c.title}** ${c.sub ?? ''} ${c.body ?? ''}`).join('\n')}`
+        case 'kv':
+          return `**${u.title}**\n${u.items.map(i => `- ${i.key}: ${i.value}`).join('\n')}`
+        case 'progress':
+          return `**${u.title}**\n${u.items.map(i => `- ${i.label}: ${i.pct}%`).join('\n')}`
+        case 'timeline':
+          return `**${u.title}**\n${u.items.map(i => `- ${i.when}: ${i.what}`).join('\n')}`
       }
     })
     .join('\n\n')
 
-const drawUi = (segs: Ui[], t: T, gap: number, send: Send) => {
-  const { Box, Text, Button, Markdown, Input } = t
+const drawUi = (segs: Ui[], t: T, io: Io) => {
+  const { Box, Text, Button, Markdown, Input, Y } = t
+  const heading = (s: string) => (s ? <Text bold>{s}</Text> : null)
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -467,84 +567,145 @@ const drawUi = (segs: Ui[], t: T, gap: number, send: Send) => {
           case 'md':
             return <Markdown text={u.text} />
           case 'title':
-            return <Text bold>{u.text}</Text>
-          case 'callout': {
-            const { color, icon } = TONE[u.tone]
-
             return (
-              <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1}>
-                <Text bold color={color}>{`${icon} ${u.title}`}</Text>
-                {u.text ? <Text>{rich(t, u.text, false)}</Text> : null}
+              <Box backgroundColor={C.hero} borderStyle="round" borderColor={C.heroLine} paddingX={2} paddingY={Y}>
+                <Text bold color={C.text}>{u.text}</Text>
               </Box>
             )
-          }
+          case 'callout':
+            return card(t, u.tone, u.title, [u.text ? <Text color={C.text}>{rich(t, u.text, false)}</Text> : null])
           case 'stats':
             return (
               <Box gap={1} flexWrap="wrap">
-                {u.items.map(i => (
-                  <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} minWidth={14}>
-                    <Text dimColor>{i.label}</Text>
-                    <Text bold>{i.value}</Text>
-                    {i.note ? <Text color={/^(\+|up)/i.test(i.note) ? 'green' : /^(-|down)/i.test(i.note) ? 'red' : 'gray'}>{i.note}</Text> : null}
-                  </Box>
-                ))}
+                {u.items.map(i => {
+                  const up = /^(\+|up)/i.test(i.note ?? '')
+                  const down = /^(-|down)/i.test(i.note ?? '')
+
+                  return (
+                    <Box flexDirection="column" gap={Y} minWidth={18} backgroundColor={C.panel} borderStyle="round" borderColor={C.line} paddingX={2} paddingY={Y}>
+                      <Text color={C.dim}>{i.label}</Text>
+                      <Text bold color={C.text}>{i.value}</Text>
+                      {i.note ? (
+                        <Text bold color={up ? TONE.ok.color : down ? TONE.bad.color : C.dim}>{`${up ? '▲ ' : down ? '▼ ' : ''}${i.note}`}</Text>
+                      ) : null}
+                    </Box>
+                  )
+                })}
               </Box>
             )
           case 'table':
-            return grid(t, u.head, u.rows, 'gray')
+            return grid(t, u.head, u.rows)
           case 'bars': {
             const data = bars(u.rows.map(r => ({ label: r.label, raw: r.raw })))
 
+            return card(t, 'note', u.title, [
+              data
+                ? chartRows(t, data.map((d, i) => ({ ...d, raw: u.rows[i]?.text ?? d.raw })), TONE.info.color)
+                : <Text color={C.text}>{u.rows.map(r => `${r.label}: ${r.text}`).join('\n')}</Text>,
+            ])
+          }
+          case 'list':
+          case 'steps':
+            return card(t, 'note', u.title, [
+              <Box flexDirection="column" gap={Y}>
+                {u.items.map((item, i) => (
+                  <Box gap={1}>
+                    {u.kind === 'steps' ? (
+                      <Text bold color={C.ink} backgroundColor={TONE.next.color}>{` ${i + 1} `}</Text>
+                    ) : (
+                      <Text bold color={TONE.next.color}>•</Text>
+                    )}
+                    <Text color={C.text}>{rich(t, item, true)}</Text>
+                  </Box>
+                ))}
+              </Box>,
+            ])
+          case 'buttons': {
+            const done = u.items.map((_, k) => io.sentOf(`${id}-${k}`)).find(Boolean)
+
             return (
-              <Box flexDirection="column">
-                <Text bold>{u.title}</Text>
-                {data ? (
-                  chartRows(t, data.map((d, i) => ({ ...d, raw: u.rows[i]?.text ?? d.raw })), 'cyan')
-                ) : (
-                  u.rows.map(r => <Text>{`${r.label}: ${r.text}`}</Text>)
+              <Box flexDirection="column" gap={Y}>
+                {heading(u.title)}
+                {done ? sentNote(t, done) : (
+                  <Box gap={1} flexWrap="wrap">
+                    {u.items.map((i, k) => (
+                      <Button key={`${id}-${k}`} label={plain(i.label)} onPress={() => io.send(`${id}-${k}`, i.prompt || `Go ahead with: ${plain(i.label)}`)} />
+                    ))}
+                  </Box>
                 )}
               </Box>
             )
           }
-          case 'list':
-          case 'steps':
+          case 'ask': {
+            const done = io.sentOf(`${id}-ask`)
+
+            return card(t, 'ask', `${TONE.ask.icon} ${u.question}`, [
+              done
+                ? sentNote(t, done)
+                : Input
+                  ? <Input key={`${id}-ask`} placeholder="Type your answer" submitLabel="send" onSubmit={v => v.trim() && io.send(`${id}-ask`, v.trim())} />
+                  : null,
+            ])
+          }
+          case 'badges':
             return (
-              <Box flexDirection="column" gap={gap}>
-                <Text bold>{u.title}</Text>
-                {u.items.map((item, i) => (
-                  <Box gap={1}>
-                    <Text bold color="blue">{u.kind === 'steps' ? `${i + 1}.` : '•'}</Text>
-                    <Text>{rich(t, item, true)}</Text>
-                  </Box>
-                ))}
+              <Box gap={1} flexWrap="wrap">
+                {u.items.map(i => pill(t, i.tone, `${TONE[i.tone].icon} ${i.text}`))}
               </Box>
             )
-          case 'buttons':
+          case 'cards':
             return (
-              <Box flexDirection="column" gap={gap}>
-                <Text bold>{u.title}</Text>
+              <Box flexDirection="column" gap={Y}>
+                {heading(u.title)}
                 <Box gap={1} flexWrap="wrap">
-                  {u.items.map((i, k) => (
-                    <Button key={`${id}-${k}`} label={plain(i.label)} onPress={() => send(i.prompt || `Go ahead with: ${plain(i.label)}`)} />
+                  {u.items.map(c => (
+                    <Box flexDirection="column" gap={Y} width={34} backgroundColor={C.panel} borderStyle="round" borderColor={TONE[c.tone].color} paddingX={2} paddingY={Y}>
+                      <Text bold color={C.text}>{c.title}</Text>
+                      {c.sub ? <Text bold color={TONE[c.tone].color}>{c.sub}</Text> : null}
+                      {c.body ? <Text color={C.dim}>{rich(t, c.body, true)}</Text> : null}
+                    </Box>
                   ))}
                 </Box>
               </Box>
             )
-          case 'ask':
-            return (
-              <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1}>
-                <Text bold color="magenta">{`❓ ${u.question}`}</Text>
-                {Input ? <Input key={`${id}-ask`} placeholder="Type your answer" submitLabel="send" onSubmit={v => v.trim() && send(v.trim())} /> : null}
+          case 'kv': {
+            const w = Math.max(...u.items.map(i => i.key.length), 4) + 2
+
+            return card(t, 'note', u.title, u.items.map(i => (
+              <Box>
+                <Box width={w}>
+                  <Text color={C.dim}>{i.key}</Text>
+                </Box>
+                <Text bold color={C.text}>{rich(t, i.value, true)}</Text>
               </Box>
-            )
-          case 'badges':
-            return (
-              <Box gap={1} flexWrap="wrap">
-                {u.items.map(i => (
-                  <Text bold color="black" backgroundColor={TONE[i.tone].color}>{` ${TONE[i.tone].icon} ${i.text} `}</Text>
-                ))}
+            )))
+          }
+          case 'progress': {
+            const w = Math.max(...u.items.map(i => i.label.length), 4) + 1
+
+            return card(t, 'note', u.title, u.items.map(i => (
+              <Box gap={1}>
+                <Box width={w}>
+                  <Text color={C.text}>{i.label}</Text>
+                </Box>
+                {meter(t, Math.round((i.pct / 100) * BAR), i.pct >= 100 ? TONE.ok.color : TONE.next.color)}
+                <Text bold color={C.text}>{`${i.pct}%`}</Text>
               </Box>
-            )
+            )))
+          }
+          case 'timeline': {
+            const w = Math.max(...u.items.map(i => i.when.length), 4) + 2
+
+            return card(t, 'note', u.title, u.items.map((i, k) => (
+              <Box gap={1}>
+                <Text color={TONE.next.color}>{k === u.items.length - 1 ? '◉' : '●'}</Text>
+                <Box width={w}>
+                  <Text bold color={C.dim}>{i.when}</Text>
+                </Box>
+                <Text color={C.text}>{rich(t, i.what, true)}</Text>
+              </Box>
+            )))
+          }
         }
       })}
     </Box>
@@ -552,14 +713,14 @@ const drawUi = (segs: Ui[], t: T, gap: number, send: Send) => {
 }
 
 // A reply drawn as cards: its ui blocks if it has them, else its markdown structure; nothing if it has neither.
-const view = (text: string, t: T, surface: string, send: Send) => {
+const view = (text: string, t: T, io: Io) => {
   const segs = parseUi(text)
 
-  if (segs.some(u => u.kind !== 'md')) return drawUi(segs, t, surface === 'terminal' ? 0 : 1, send)
+  if (segs.some(u => u.kind !== 'md')) return drawUi(segs, t, io)
 
   const list = parse(text)
 
-  return isStructured(list) ? draw(list, t, surface, send) : undefined
+  return isStructured(list) ? draw(list, t, io) : undefined
 }
 
 const FENCE = '`'.repeat(3)
@@ -570,19 +731,27 @@ title: Heading text
 callout <ok|warn|bad|info|next>: Title | Body
 stats: then rows "- Label | Value | note" (a note starting with + or - shows green or red)
 table: Col | Col | Col, then one row per line
+cards: Title, then rows "- Name | subtitle | short body | ok|warn|bad|info|next" (a grid of small cards, good for comparing items)
+kv: Title, then rows "- Key | Value" (a fact sheet for one thing)
 bars: Chart title, then rows "- Label | number | display text"
+progress: Title, then rows "- Label | percent"
+timeline: Title, then rows "- When | What happened"
 list: Title, or steps: Title, then rows "- item"
 buttons: Title, then rows "- Label | prompt sent when pressed (optional)"
 ask: A question the person answers in a text box
 badges: then rows "- text | ok|warn|bad|info"
-Start each title and callout title with one fitting emoji. Inline **bold**, \`code\` and links work in cells and items. Use only figures you actually know: never invent numbers for stats, bars or tables.
+
+Style: start each title, card name and callout title with one fitting emoji. In cells and items, write a short status as a pill: [ok: Public], [warn: Private], [bad: Delisted]. Inline **bold**, \`code\` and links work too. Keep cells short; put long explanation in a card body or the prose. When you offer the person choices, use buttons, not a bullet list; when you need their input, use ask. Use only figures you actually know: never invent numbers.
 
 Example:
 ${FENCE}ui
 title: 🍎 Stock snapshot
 callout warn: ⚠️ Not live data | Background only, not advice.
-table: Ticker | Company | Note
-- AAPL | Apple | Services keep growing
+cards: Companies
+- 🍎 Apple | AAPL | Services keep growing | ok
+- 🤖 OpenAI | Private | No public shares | warn
+table: Company | Status | Market cap
+- Apple | [ok: Public] | about $5T
 buttons: Next steps
 - Get live prices | Search the web for current prices
 ${FENCE}`
@@ -629,14 +798,15 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const t = $.ui.resolve(e)
+    const t = { ...$.ui.resolve(e), Y: e.surface === 'terminal' ? 0 : 1 }
+    const text = await read($, latest)
 
-    return view(await read($, latest), t, e.surface, sender($)) ?? <t.Text dimColor>Nothing yet. Ask Claude something.</t.Text>
+    return view(text, t, await ioFor($, text)) ?? <t.Text dimColor>Nothing yet. Ask Claude something.</t.Text>
   })
 
   // Inline: redraw replies in the transcript as cards. Off, a ui block falls back to plain markdown.
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
-    const t = $.ui.resolve(e)
+    const t = { ...$.ui.resolve(e), Y: e.surface === 'terminal' ? 0 : 1 }
     const segs = parseUi(e.props.text)
 
     if (!(await read($, isOn))) {
@@ -644,6 +814,6 @@ export const register: Register = on => {
     }
     if ((e.props as { isSummary?: true }).isSummary) return next(e)
 
-    return view(e.props.text, t, e.surface, sender($)) ?? next(e)
+    return view(e.props.text, t, await ioFor($, e.props.text)) ?? next(e)
   })
 }

@@ -36,11 +36,18 @@ ask: Which stock first?
 | `callout ok\|warn\|bad\|info\|next: Title \| Body` | colored card with a sticker |
 | `stats:` rows `- Label \| Value \| note` | stat tiles, note green for `+`, red for `-` |
 | `table: A \| B` rows `- a \| b` | striped table with real columns |
+| `cards: Title` rows `- Name \| subtitle \| body \| tone` | grid of tinted mini cards |
+| `kv: Title` rows `- Key \| Value` | fact sheet |
 | `bars: Title` rows `- Label \| number \| text` | bar chart |
+| `progress: Title` rows `- Label \| percent` | progress meters |
+| `timeline: Title` rows `- When \| What` | timeline |
 | `list:` / `steps:` rows `- item` | bullets / numbered steps |
 | `buttons:` rows `- Label \| prompt` | buttons that send the prompt to Claude |
 | `ask: Question` | text box that sends your answer to Claude |
 | `badges:` rows `- text \| tone` | sticker badges |
+| `[ok: Public]` inside any cell or item | a soft colored pill |
+
+Cards are dark tinted panels with their own text colors, so they read the same on light and dark themes. An ask or a button sends once; the card then shows what it sent.
 
 The system prompt is fixed when a thread starts, so start a new session after installing or updating. `/cardify off` shows `ui` blocks as plain markdown instead.
 

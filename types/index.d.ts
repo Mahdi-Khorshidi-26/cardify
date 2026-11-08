@@ -7,6 +7,10 @@ export type Block =
 
 declare module 'claude-code' {
   interface PluginState {
-    cardify: { latest: Shaped<string>; isOn: Shaped<boolean> }
+    cardify: {
+      latest: Shaped<string>
+      isOn: Shaped<boolean>
+      sent: Shaped<Record<string, string>>
+    }
   }
 }
