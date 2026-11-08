@@ -32,7 +32,8 @@ ask: Which stock first?
 
 | Component | Draws |
 |---|---|
-| `title: text` | heading |
+| `title: text` | hero banner (once per reply; later titles become section headings) |
+| `section: text` | section heading |
 | `callout ok\|warn\|bad\|info\|next: Title \| Body` | colored card with a sticker |
 | `stats:` rows `- Label \| Value \| note` | stat tiles, note green for `+`, red for `-` |
 | `table: A \| B` rows `- a \| b` | striped table with real columns |

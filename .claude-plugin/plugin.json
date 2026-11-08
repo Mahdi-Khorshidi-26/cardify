@@ -1,6 +1,6 @@
 {
   "name": "cardify",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Turns Claude's answers into readable cards, tables and badges in a side pane.",
   "author": { "name": "Mahdi Khorshidi" },
   "license": "MIT",

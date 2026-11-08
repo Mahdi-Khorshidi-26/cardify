@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { group, listChart, parse, parseUi, split, tableChart, toMarkdown, tone } from './register'
+import { group, listChart, parse, parseUi, split, tableChart, toMarkdown, tone, wide } from './register'
 
 test('split colors status words', () => {
   const runs = split('Build passed, deploy FAILED')
@@ -237,4 +237,19 @@ test('an ask sends once, then says what it sent', async ($, on) => {
   await again.unmount()
 
   expect(sent).toEqual(['Apple'])
+})
+
+test('wide counts emoji as two cells', () => {
+  expect(wide('Apple')).toBe(5)
+  expect(wide('🛰️ Starlink')).toBe(11)
+  expect(wide('⚠️')).toBe(2)
+})
+
+test('a later title and a section draw as headings, not banners', async $ => {
+  const segs = parseUi(`${F}ui\ntitle: Top\nsection: Part one\ntitle: Part two\n${F}`)
+  expect(segs.map(u => u.kind)).toEqual(['title', 'section', 'title'])
+
+  const ui = await $.ui.mount({ ...reply(`${F}ui\ntitle: Top\nsection: Part one\ntitle: Part two\n${F}`), surface: 'desktop' })
+  expect(await ui.findAll({ type: 'Text', text: /▍/ })).toHaveLength(2)
+  await ui.unmount()
 })

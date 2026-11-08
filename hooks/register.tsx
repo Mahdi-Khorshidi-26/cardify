@@ -40,6 +40,14 @@ const asTone = (s: string | undefined, fallback: Tone = 'info'): Tone =>
 
 const BAR = 20
 
+// How many cells a string takes: emoji and pictographs are two wide, variation selectors none.
+export const wide = (s: string) =>
+  [...s].reduce((w, ch) => {
+    const cp = ch.codePointAt(0) ?? 0
+
+    return w + (cp === 0xfe0f || cp === 0x200d ? 0 : cp >= 0x1f000 || (cp >= 0x2600 && cp <= 0x27bf) ? 2 : 1)
+  }, 0)
+
 // ---- Markdown fallback: replies without a ui block still get cards from their structure.
 
 const cells = (line: string) =>
@@ -275,7 +283,7 @@ const meter = ({ Text }: T, n: number, color: string) => (
 
 const chartRows = (t: T, data: Bar[], color: string) => {
   const { Box, Text, Y } = t
-  const w = Math.max(...data.map(d => d.label.length)) + 1
+  const w = Math.max(...data.map(d => wide(d.label))) + 1
 
   return (
     <Box flexDirection="column" gap={Y}>
@@ -297,7 +305,7 @@ const chartRows = (t: T, data: Bar[], color: string) => {
 const grid = (t: T, head: string[], rows: string[][]) => {
   const { Box, Text, Y } = t
   const isNum = head.map((_, c) => rows.length > 0 && rows.every(r => NUM.test(plain(r[c] ?? ''))))
-  const widths = head.map((label, c) => Math.min(32, Math.max(label.length, ...rows.map(r => plain(r[c] ?? '').length))) + 4)
+  const widths = head.map((label, c) => Math.min(32, Math.max(wide(label), ...rows.map(r => wide(plain(r[c] ?? ''))))) + 4)
   const cell = (c: number, kid: El) => (
     <Box width={widths[c] ?? 14} paddingX={2} justifyContent={isNum[c] ? 'flex-end' : 'flex-start'}>
       {kid}
@@ -417,7 +425,7 @@ const draw = (list: Block[], t: T, io: Io) => {
 
 export type Ui =
   | { kind: 'md'; text: string }
-  | { kind: 'title'; text: string }
+  | { kind: 'title' | 'section'; text: string }
   | { kind: 'callout'; tone: Tone; title: string; text: string }
   | { kind: 'stats'; items: { label: string; value: string; note?: string }[] }
   | { kind: 'table'; head: string[]; rows: string[][] }
@@ -431,13 +439,15 @@ export type Ui =
   | { kind: 'progress'; title: string; items: { label: string; pct: number }[] }
   | { kind: 'timeline'; title: string; items: { when: string; what: string }[] }
 
-const NAME = /^(title|callout|stats|table|bars|list|steps|buttons|ask|badges|cards|kv|progress|timeline)(?:\s+(\w+))?\s*:\s*(.*)$/i
+const NAME = /^(title|section|callout|stats|table|bars|list|steps|buttons|ask|badges|cards|kv|progress|timeline)(?:\s+(\w+))?\s*:\s*(.*)$/i
 const parts = (s: string) => s.split('|').map(p => p.trim())
 
 const component = (name: string, tag: string | undefined, head: string, rows: string[][]): Ui | undefined => {
   switch (name) {
     case 'title':
       return { kind: 'title', text: head }
+    case 'section':
+      return { kind: 'section', text: head }
     case 'callout': {
       const [title = '', ...rest] = parts(head)
 
@@ -525,6 +535,8 @@ export const toMarkdown = (segs: Ui[]) =>
           return u.text
         case 'title':
           return `## ${u.text}`
+        case 'section':
+          return `### ${u.text}`
         case 'callout':
           return `> **${u.title}** ${u.text}`
         case 'stats':
@@ -557,6 +569,14 @@ export const toMarkdown = (segs: Ui[]) =>
 const drawUi = (segs: Ui[], t: T, io: Io) => {
   const { Box, Text, Button, Markdown, Input, Y } = t
   const heading = (s: string) => (s ? <Text bold>{s}</Text> : null)
+  // One hero per reply; every later title reads as a section heading, so a long answer isn't a stack of banners.
+  const hero = segs.findIndex(u => u.kind === 'title')
+  const section = (s: string) => (
+    <Box gap={1}>
+      <Text color={TONE.next.color}>▍</Text>
+      <Text bold>{s}</Text>
+    </Box>
+  )
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -566,15 +586,19 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
         switch (u.kind) {
           case 'md':
             return <Markdown text={u.text} />
+          case 'section':
+            return section(u.text)
           case 'title':
-            return (
+            return n !== hero ? section(u.text) : (
               <Box backgroundColor={C.hero} borderStyle="round" borderColor={C.heroLine} paddingX={2} paddingY={Y}>
                 <Text bold color={C.text}>{u.text}</Text>
               </Box>
             )
           case 'callout':
             return card(t, u.tone, u.title, [u.text ? <Text color={C.text}>{rich(t, u.text, false)}</Text> : null])
-          case 'stats':
+          case 'stats': {
+            const w = Math.min(30, Math.max(18, ...u.items.map(i => Math.max(wide(i.label), wide(i.value), wide(i.note ?? '') + 2) + 4)))
+
             return (
               <Box gap={1} flexWrap="wrap">
                 {u.items.map(i => {
@@ -582,7 +606,7 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
                   const down = /^(-|down)/i.test(i.note ?? '')
 
                   return (
-                    <Box flexDirection="column" gap={Y} minWidth={18} backgroundColor={C.panel} borderStyle="round" borderColor={C.line} paddingX={2} paddingY={Y}>
+                    <Box flexDirection="column" gap={Y} width={w} backgroundColor={C.panel} borderStyle="round" borderColor={C.line} paddingX={2} paddingY={Y}>
                       <Text color={C.dim}>{i.label}</Text>
                       <Text bold color={C.text}>{i.value}</Text>
                       {i.note ? (
@@ -593,6 +617,7 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
                 })}
               </Box>
             )
+          }
           case 'table':
             return grid(t, u.head, u.rows)
           case 'bars': {
@@ -669,7 +694,7 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
               </Box>
             )
           case 'kv': {
-            const w = Math.max(...u.items.map(i => i.key.length), 4) + 2
+            const w = Math.max(...u.items.map(i => wide(i.key)), 4) + 2
 
             return card(t, 'note', u.title, u.items.map(i => (
               <Box>
@@ -681,7 +706,7 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
             )))
           }
           case 'progress': {
-            const w = Math.max(...u.items.map(i => i.label.length), 4) + 1
+            const w = Math.max(...u.items.map(i => wide(i.label)), 4) + 1
 
             return card(t, 'note', u.title, u.items.map(i => (
               <Box gap={1}>
@@ -694,7 +719,7 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
             )))
           }
           case 'timeline': {
-            const w = Math.max(...u.items.map(i => i.when.length), 4) + 2
+            const w = Math.max(...u.items.map(i => wide(i.when)), 4) + 2
 
             return card(t, 'note', u.title, u.items.map((i, k) => (
               <Box gap={1}>
@@ -727,7 +752,8 @@ const FENCE = '`'.repeat(3)
 const UI_PROMPT = `Cardify is installed: the person's screen draws a fenced ${FENCE}ui block as real UI (cards, tables, charts, buttons). For an answer with structure (comparisons, records, status reports, steps, numbers, choices) put the structured part in a ${FENCE}ui block and keep explanation as normal markdown around it. Conversation, short answers and real code stay plain markdown, and code never goes inside a ui block.
 
 Write one component per line as "name: header", then its rows as "- a | b | c". Components:
-title: Heading text
+title: Heading text (once, at the top)
+section: A later heading
 callout <ok|warn|bad|info|next>: Title | Body
 stats: then rows "- Label | Value | note" (a note starting with + or - shows green or red)
 table: Col | Col | Col, then one row per line
@@ -741,12 +767,13 @@ buttons: Title, then rows "- Label | prompt sent when pressed (optional)"
 ask: A question the person answers in a text box
 badges: then rows "- text | ok|warn|bad|info"
 
-Style: start each title, card name and callout title with one fitting emoji. In cells and items, write a short status as a pill: [ok: Public], [warn: Private], [bad: Delisted]. Inline **bold**, \`code\` and links work too. Keep cells short; put long explanation in a card body or the prose. When you offer the person choices, use buttons, not a bullet list; when you need their input, use ask. Use only figures you actually know: never invent numbers.
+Style: start each title, card name and callout title with one fitting emoji. In cells and items, write a short status as a pill: [ok: Public], [warn: Private], [bad: Delisted]. Inline **bold**, \`code\` and links work too. Keep cells short; put long explanation in a card body or the prose. Show several items side by side with cards (not one callout each); keep callout for one warning or key note. Put dated events in a timeline, not steps. When you offer the person choices, use buttons, not a bullet list; when you need their input, use ask. Use only figures you actually know: never invent numbers.
 
 Example:
 ${FENCE}ui
 title: 🍎 Stock snapshot
 callout warn: ⚠️ Not live data | Background only, not advice.
+section: 🏢 Companies
 cards: Companies
 - 🍎 Apple | AAPL | Services keep growing | ok
 - 🤖 OpenAI | Private | No public shares | warn
