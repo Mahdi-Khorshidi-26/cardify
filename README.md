@@ -32,7 +32,9 @@ claude plugin install cardify --marketplace Mahdi-Khorshidi-26/cardify
 
 ## Use
 
-Run `/cardify` to open the pane. It updates after every answer.
+Replies with headings, lists, tables or code fences are redrawn as cards right in the chat. Plain prose is left alone. The stored message is untouched, so `ctrl+o` still shows the original.
+
+Run `/cardify` to open a side pane that keeps the latest answer as cards.
 
 ## Develop
 
