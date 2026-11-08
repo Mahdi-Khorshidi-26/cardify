@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { ElementTable, EngineInterface, Register } from 'claude-code'
+import type { ElementTable, EngineInterface, Register, UiCopyArgs } from 'claude-code'
 
 import type { Block } from '../types'
 
@@ -10,6 +10,8 @@ const latest = atom({ plugin: 'cardify', key: 'latest' } as const, '', { shape: 
 const isOn = atom({ plugin: 'cardify', key: 'isOn' } as const, true, { shape: 'on-1' })
 // What each ask or button already sent, so a card shows "Sent" and can't send twice. ponytail: grows for the session.
 const sent = atom({ plugin: 'cardify', key: 'sent' } as const, {} as Record<string, string>, { shape: 'sent-1' })
+// Which faq answers are open and which checklist items were ticked, per message.
+const toggled = atom({ plugin: 'cardify', key: 'toggled' } as const, {} as Record<string, boolean>, { shape: 'toggled-1' })
 
 // ---- Look: cards are dark panels with their own text color, so they read the same on a light or dark theme.
 
@@ -199,7 +201,13 @@ export const listChart = (items: string[]) => {
 
 // ---- Interaction: an ask or a button sends once, as the person, and its card then says what it sent.
 
-type Io = { send: (key: string, text: string) => void; sentOf: (key: string) => string | undefined }
+type Io = {
+  send: (key: string, text: string) => void
+  sentOf: (key: string) => string | undefined
+  isToggled: (key: string) => boolean
+  toggle: (key: string) => void
+  copy: (args: UiCopyArgs) => void
+}
 
 // A message's own id: the same text in the pane and the transcript shares what it sent.
 export const hash = (s: string) => {
@@ -215,9 +223,17 @@ const fired = new Set<string>()
 const ioFor = async ($: EngineInterface, text: string): Promise<Io> => {
   const id = hash(text)
   const done = await read($, sent)
+  const flips = await read($, toggled)
 
   return {
     sentOf: key => done[`${id}:${key}`],
+    isToggled: key => flips[`${id}:${key}`] === true,
+    toggle: key => {
+      void update($, toggled, m => ({ ...m, [`${id}:${key}`]: !m[`${id}:${key}`] }))
+    },
+    copy: args => {
+      $.ui.copy(args).then(() => $.ui.toast('Copied'), () => {})
+    },
     send: (key, said) => {
       const k = `${id}:${key}`
       if (fired.has(k) || done[k]) return
@@ -575,11 +591,19 @@ export type Ui =
   | { kind: 'timeline'; title: string; items: { when: string; what: string }[] }
   | { kind: 'pie'; title: string; items: { label: string; value: number }[] }
   | { kind: 'trend'; title: string; items: { label: string; values: number[]; text: string }[] }
+  | { kind: 'command'; title: string; lines: string[] }
+  | { kind: 'tree'; title: string; items: { name: string; depth: number; note?: string }[] }
+  | { kind: 'compare'; left: string; right: string; rows: { a: string; b: string }[] }
+  | { kind: 'checklist'; title: string; items: { text: string; done: boolean }[] }
+  | { kind: 'faq'; title: string; items: { q: string; a: string }[] }
+  | { kind: 'rating'; title: string; items: { label: string; score: number; max: number; note?: string }[] }
+  | { kind: 'quote'; text: string; who?: string }
+  | { kind: 'links'; title: string; items: { title: string; url: string; desc?: string }[] }
 
-const NAME = /^(title|section|callout|stats|table|bars|list|steps|buttons|ask|badges|cards|kv|progress|timeline|pie|trend)(?:\s+(\w+))?\s*:\s*(.*)$/i
+const NAME = /^(title|section|callout|stats|table|bars|list|steps|buttons|ask|badges|cards|kv|progress|timeline|pie|trend|command|tree|compare|checklist|faq|rating|quote|links)(?:\s+(\w+))?\s*:\s*(.*)$/i
 const parts = (s: string) => s.split('|').map(p => p.trim())
 
-const component = (name: string, tag: string | undefined, head: string, rows: string[][]): Ui | undefined => {
+const component = (name: string, tag: string | undefined, head: string, rows: string[][], depths: number[]): Ui | undefined => {
   switch (name) {
     case 'title': {
       const [text = '', ...sub] = parts(head)
@@ -629,33 +653,78 @@ const component = (name: string, tag: string | undefined, head: string, rows: st
           return { label, values, text: text ?? String(values[values.length - 1] ?? '') }
         }),
       }
+    case 'command':
+      return { kind: 'command', title: head, lines: rows.map(r => r.join(' | ')) }
+    case 'tree': {
+      const base = Math.min(...depths, 0)
+
+      return { kind: 'tree', title: head, items: rows.map(([name = '', note], i) => ({ name, note, depth: Math.max((depths[i] ?? 0) - base, 0) })) }
+    }
+    case 'compare': {
+      const [left = 'One', right = 'Other'] = parts(head)
+
+      return { kind: 'compare', left, right, rows: rows.map(([a = '', b = '']) => ({ a, b })) }
+    }
+    case 'checklist':
+      return {
+        kind: 'checklist',
+        title: head,
+        items: rows.map(r => {
+          const text = r.join(' | ')
+
+          return { done: /^\[(x|X|✓)\]/.test(text), text: text.replace(/^\[[ xX✓]?\]\s*/, '') }
+        }),
+      }
+    case 'faq':
+      return { kind: 'faq', title: head, items: rows.map(([q = '', ...a]) => ({ q, a: a.join(' | ') })) }
+    case 'rating':
+      return { kind: 'rating', title: head, items: rows.map(([label = '', score = '', max = '', note]) => ({ label, score: num(score) || 0, max: num(max) || 5, note })) }
+    case 'quote': {
+      const [text = '', who] = parts(head)
+
+      return { kind: 'quote', text, who }
+    }
+    case 'links':
+      return { kind: 'links', title: head, items: rows.map(([title = '', url = '', desc]) => ({ title, url, desc })) }
     default:
       return undefined
   }
 }
 
-// One component per `name: header` line, its rows as `- a | b | c` lines. Unknown lines are skipped.
+// One component per `name: header` line, its rows as `- a | b | c` lines (indent sets the depth, for tree).
+// Lines that are neither are shown as prose, so nothing Claude wrote is lost.
 const block = (src: string): Ui[] => {
   const out: Ui[] = []
-  let cur: { name: string; tag?: string; head: string; rows: string[][] } | undefined
+  let cur: { name: string; tag?: string; head: string; rows: string[][]; depths: number[] } | undefined
+  let prose: string[] = []
+  const flushProse = () => {
+    if (prose.join('').trim()) out.push({ kind: 'md', text: prose.join('\n').trim() })
+    prose = []
+  }
   const flush = () => {
-    const u = cur && component(cur.name, cur.tag, cur.head, cur.rows)
+    const u = cur && component(cur.name, cur.tag, cur.head, cur.rows, cur.depths)
     if (u) out.push(u)
     cur = undefined
   }
 
   for (const line of src.split('\n')) {
     const m = NAME.exec(line.trim())
-    const row = /^\s*-\s+(.*)$/.exec(line)
+    const row = /^(\s*)[-*]\s+(.*)$/.exec(line)
 
     if (m) {
       flush()
-      cur = { name: (m[1] ?? '').toLowerCase(), tag: m[2]?.toLowerCase(), head: (m[3] ?? '').trim(), rows: [] }
+      flushProse()
+      cur = { name: (m[1] ?? '').toLowerCase(), tag: m[2]?.toLowerCase(), head: (m[3] ?? '').trim(), rows: [], depths: [] }
     } else if (row && cur) {
-      cur.rows.push(parts(row[1] ?? ''))
+      cur.rows.push(parts(row[2] ?? ''))
+      cur.depths.push(Math.floor((row[1] ?? '').replace(/\t/g, '  ').length / 2))
+    } else if (line.trim()) {
+      flush()
+      prose.push(line)
     }
   }
   flush()
+  flushProse()
 
   return out
 }
@@ -718,12 +787,28 @@ export const toMarkdown = (segs: Ui[]) =>
           return `**${u.title}**\n${u.items.map(i => `- ${i.label}: ${i.value}`).join('\n')}`
         case 'trend':
           return `**${u.title}**\n${u.items.map(i => `- ${i.label}: ${i.values.join(', ')} (${i.text})`).join('\n')}`
+        case 'command':
+          return `${'`'.repeat(3)}sh\n${u.lines.join('\n')}\n${'`'.repeat(3)}`
+        case 'tree':
+          return `**${u.title}**\n${u.items.map(i => `${'  '.repeat(i.depth)}- ${i.name}${i.note ? ` (${i.note})` : ''}`).join('\n')}`
+        case 'compare':
+          return [`| ${u.left} | ${u.right} |`, '|---|---|', ...u.rows.map(r => `| ${r.a} | ${r.b} |`)].join('\n')
+        case 'checklist':
+          return `**${u.title}**\n${u.items.map(i => `- [${i.done ? 'x' : ' '}] ${i.text}`).join('\n')}`
+        case 'faq':
+          return `**${u.title}**\n${u.items.map(i => `- **${i.q}** ${i.a}`).join('\n')}`
+        case 'rating':
+          return `**${u.title}**\n${u.items.map(i => `- ${i.label}: ${i.score}/${i.max}${i.note ? ` ${i.note}` : ''}`).join('\n')}`
+        case 'quote':
+          return `> ${u.text}${u.who ? `\n> — ${u.who}` : ''}`
+        case 'links':
+          return `**${u.title}**\n${u.items.map(i => `- [${i.title}](${i.url})${i.desc ? ` ${i.desc}` : ''}`).join('\n')}`
       }
     })
     .join('\n\n')
 
 const drawUi = (segs: Ui[], t: T, io: Io) => {
-  const { Box, Text, Button, Markdown, Input, Svg, Y } = t
+  const { Box, Text, Button, Markdown, Input, Svg, Link, Y } = t
   const heading = (s: string) => (s ? <Text bold {...ty(t, { size: 'heading' })}>{s}</Text> : null)
   // One hero per reply; every later title reads as a section heading, so a long answer isn't a stack of banners.
   const hero = segs.findIndex(u => u.kind === 'title')
@@ -917,6 +1002,136 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
               </Box>
             )))
           }
+          case 'command':
+            return card(t, 'note', u.title || '⌨️ Run', u.lines.map((line, k) => (
+              <Box gap={1} alignItems="center">
+                <Box flexGrow={1} backgroundColor={C.ink} borderStyle="round" borderColor={C.line} paddingX={2}>
+                  <Text {...ty(t, { mono: true })} color={C.text}>
+                    <Text color={TONE.ok.color}>{'$ '}</Text>
+                    {line}
+                  </Text>
+                </Box>
+                <Button key={`${id}-copy-${k}`} label="Copy" onPress={press => io.copy({ text: line, surface: press.surface })} />
+              </Box>
+            )))
+          case 'tree': {
+            const last = u.items.map((it, i) => {
+              for (const next of u.items.slice(i + 1)) {
+                if (next.depth < it.depth) return true
+                if (next.depth === it.depth) return false
+              }
+
+              return true
+            })
+            const open: boolean[] = []
+
+            return card(t, 'note', u.title, u.items.map((it, i) => {
+              const pre = Array.from({ length: it.depth }, (_, d) => (open[d] ? '│  ' : '   ')).join('')
+              open[it.depth] = !last[i]
+              const isDir = it.name.endsWith('/')
+
+              return (
+                <Text {...ty(t, { mono: true })}>
+                  <Text color={C.line}>{`${pre}${last[i] ? '└─ ' : '├─ '}`}</Text>
+                  <Text bold={isDir} color={isDir ? TONE.next.color : C.text}>{`${isDir ? '📁' : '📄'} ${it.name}`}</Text>
+                  {it.note ? <Text color={C.dim}>{`  ${it.note}`}</Text> : null}
+                </Text>
+              )
+            }))
+          }
+          case 'compare': {
+            const side = (title: string, points: string[], tn: Tone) => (
+              <Box flexGrow={1} width={40}>
+                {card(t, tn, `${TONE[tn].icon} ${title}`, points.map(p => (
+                  <Box gap={1}>
+                    <Text bold color={TONE[tn].color}>•</Text>
+                    <Text color={C.text}>{rich(t, p, true)}</Text>
+                  </Box>
+                )))}
+              </Box>
+            )
+            const sideTone = (title: string, fallback: Tone): Tone =>
+              /\b(pros?|advantages?|good|yes|do|benefits?|strengths?)\b/i.test(title)
+                ? 'ok'
+                : /\b(cons?|disadvantages?|bad|no|don.t|avoid|risks?|weakness(es)?|drawbacks?)\b/i.test(title)
+                  ? 'bad'
+                  : fallback
+
+            return (
+              <Box gap={1} flexWrap="wrap">
+                {side(u.left, u.rows.map(r => r.a).filter(Boolean), sideTone(u.left, 'next'))}
+                {side(u.right, u.rows.map(r => r.b).filter(Boolean), sideTone(u.right, 'info'))}
+              </Box>
+            )
+          }
+          case 'checklist': {
+            const done = u.items.filter((it, k) => it.done !== io.isToggled(`${id}-check-${k}`)).length
+
+            return card(t, 'note', `${u.title}  ${done}/${u.items.length}`, u.items.map((it, k) => {
+              const isDone = it.done !== io.isToggled(`${id}-check-${k}`)
+
+              return (
+                <Button
+                  key={`${id}-check-${k}`}
+                  plain
+                  dimColor={isDone}
+                  label={`${isDone ? '✅' : '⬜'} ${plain(it.text)}`}
+                  onPress={() => io.toggle(`${id}-check-${k}`)}
+                />
+              )
+            }))
+          }
+          case 'faq':
+            return card(t, 'note', u.title, u.items.map((it, k) => {
+              const isOpen = io.isToggled(`${id}-faq-${k}`)
+
+              return (
+                <Box flexDirection="column">
+                  <Button key={`${id}-faq-${k}`} plain label={`${isOpen ? '▾' : '▸'} ${plain(it.q)}`} onPress={() => io.toggle(`${id}-faq-${k}`)} />
+                  {isOpen ? (
+                    <Box paddingLeft={2}>
+                      <Text color={C.soft}>{rich(t, it.a, false)}</Text>
+                    </Box>
+                  ) : null}
+                </Box>
+              )
+            }))
+          case 'rating': {
+            const w = Math.max(...u.items.map(i => wide(i.label)), 4) + 2
+
+            return card(t, 'note', u.title, u.items.map(i => {
+              const max = i.max > 0 ? i.max : 5
+              const full = Math.round((Math.min(Math.max(i.score, 0), max) / max) * 5)
+
+              return (
+                <Box gap={1}>
+                  <Box width={w}>
+                    <Text color={C.text}>{i.label}</Text>
+                  </Box>
+                  <Text color={TONE.warn.color}>{'★'.repeat(full) + '☆'.repeat(5 - full)}</Text>
+                  <Text bold color={C.text}>{`${i.score}/${max}`}</Text>
+                  {i.note ? <Text color={C.dim}>{i.note}</Text> : null}
+                </Box>
+              )
+            }))
+          }
+          case 'quote':
+            return (
+              <Box gap={2} backgroundColor={C.panel} borderStyle="round" borderColor={C.line} paddingX={2} paddingY={Y}>
+                <Text bold color={C.heroLine}>❝</Text>
+                <Box flexDirection="column" gap={Y}>
+                  <Text italic color={C.text}>{u.text}</Text>
+                  {u.who ? <Text color={C.dim}>{`— ${u.who}`}</Text> : null}
+                </Box>
+              </Box>
+            )
+          case 'links':
+            return card(t, 'note', u.title, u.items.map(i => (
+              <Box flexDirection="column">
+                {/^https?:\/\//.test(i.url) ? <Link href={i.url} label={`🔗 ${i.title}`} /> : <Text bold color={C.text}>{`🔗 ${i.title}`}</Text>}
+                {i.desc ? <Text color={C.dim}>{i.desc}</Text> : null}
+              </Box>
+            )))
           case 'timeline': {
             const w = Math.max(...u.items.map(i => wide(i.when)), 4) + 3
 
@@ -948,33 +1163,24 @@ const view = (text: string, t: T, io: Io) => {
 }
 
 const FENCE = '`'.repeat(3)
-const UI_PROMPT = `Cardify is installed: the person's screen draws a fenced ${FENCE}ui block as real UI (cards, tables, charts, buttons). For an answer with structure (comparisons, records, status reports, steps, numbers, choices) put the structured part in a ${FENCE}ui block and keep explanation as normal markdown around it. Conversation, short answers and real code stay plain markdown, and code never goes inside a ui block.
+const UI_PROMPT = `Cardify is installed: the person's screen draws a fenced ${FENCE}ui block as real UI. Use one for any answer with structure, whatever the topic: comparisons, data, plans, status, how-tos, choices, reviews, file layouts, recipes, schedules, explanations with key facts. Plain conversation and short answers stay plain markdown. Code stays in normal markdown code fences outside the block; a shell command to run may go in a command component.
 
-Write one component per line as "name: header", then its rows as "- a | b | c". Components:
-title: Heading text | optional subtitle (once, at the top)
-section: A later heading
-callout <ok|warn|bad|info|next>: Title | Body
-stats: then rows "- Label | Value | note" (a note starting with + or - shows green or red)
-table: Col | Col | Col, then one row per line
-cards: Title, then rows "- Name | subtitle | short body | ok|warn|bad|info|next" (a grid of small cards, good for comparing items)
-kv: Title, then rows "- Key | Value" (a fact sheet for one thing)
-bars: Chart title, then rows "- Label | number | display text"
-progress: Title, then rows "- Label | percent"
-timeline: Title, then rows "- When | What happened"
-pie: Title, then rows "- Label | number" (a donut of shares)
-trend: Title, then rows "- Label | 3, 5, 4, 8 | display text" (a sparkline per row)
-list: Title, or steps: Title, then rows "- item"
-buttons: Title, then rows "- Label | prompt sent when pressed (optional)"
-ask: A question the person answers in a text box
-badges: then rows "- text | ok|warn|bad|info"
+Syntax: one component per line as "name: header", then its rows as "- a | b | c". Only tree uses indentation (two spaces per level). A line that isn't a component or a row is shown as text.
 
-Style: start each title, card name and callout title with one fitting emoji. In cells and items, write a short status as a pill: [ok: Public], [warn: Private], [bad: Delisted]. Inline **bold**, \`code\` and links work too. Keep cells short; put long explanation in a card body or the prose. Show several items side by side with cards (not one callout each); keep callout for one warning or key note. Put dated events in a timeline, not steps. When you offer the person choices, use buttons, not a bullet list; when you need their input, use ask. Use only figures you actually know: never invent numbers.
+Layout: title: Heading | optional subtitle (once, at the top) · section: A later heading · callout ok|warn|bad|info|next: Title | Body · quote: Text | Who said it
+Items: cards: Title, rows "- Name | subtitle | short body | ok|warn|bad|info|next" · kv: Title, rows "- Key | Value" · table: A | B | C, rows "- a | b | c" · compare: Left | Right, rows "- left point | right point" · links: Title, rows "- Name | https://url | why it helps"
+Numbers: stats: rows "- Label | Value | +note or -note" · bars: Title, rows "- Label | number | display text" · pie: Title, rows "- Label | number" · trend: Title, rows "- Label | 1, 3, 2, 5 | display text" · progress: Title, rows "- Label | percent" · rating: Title, rows "- Label | 4.5 | 5 | note"
+Sequences: steps: Title, rows "- step" · checklist: Title, rows "- [x] done" or "- [ ] to do" · timeline: Title, rows "- When | What" · tree: Title, rows "- src/" then "  - app.ts | note" · command: Title, rows "- npm install" (one command per row, each gets a Copy button) · list: Title, rows "- item"
+Interaction: buttons: Title, rows "- Label | prompt sent when pressed" · ask: A question answered in a text box · faq: Title, rows "- Question | Answer" (expands on click) · badges: rows "- text | ok|warn|bad|info"
+
+Pick by answer type: comparison: cards plus a table or compare. How-to: steps, command, checklist. Data: stats, bars, pie, trend. Explanation: prose, a callout info for the key idea, kv for definitions, faq for likely follow-ups. Review or decision: rating, compare, a callout with the verdict. Codebase: tree, a table of files, command. Plan or history: timeline or table. Status report: badges, progress, callout. Offering choices: buttons. Needing input: ask.
+
+Style: start each title, card name and callout title with one fitting emoji. Put a short status in a cell as a pill: [ok: Public], [warn: Beta], [bad: Down]. Inline **bold**, \`code\` and links work in cells and items. Keep cells short; long text belongs in a card body or the prose. Never invent numbers.
 
 Example:
 ${FENCE}ui
-title: 🍎 Stock snapshot | Four companies, Nov 2026
+title: 🍎 Stock snapshot | Three companies, Nov 2026
 callout warn: ⚠️ Not live data | Background only, not advice.
-section: 🏢 Companies
 cards: Companies
 - 🍎 Apple | AAPL | Services keep growing | ok
 - 🤖 OpenAI | Private | No public shares | warn

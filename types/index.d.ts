@@ -11,6 +11,7 @@ declare module 'claude-code' {
       latest: Shaped<string>
       isOn: Shaped<boolean>
       sent: Shaped<Record<string, string>>
+      toggled: Shaped<Record<string, boolean>>
     }
   }
 }

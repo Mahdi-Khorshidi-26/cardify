@@ -48,11 +48,21 @@ ask: Which stock first?
 | `buttons:` rows `- Label \| prompt` | buttons that send the prompt to Claude |
 | `ask: Question` | text box that sends your answer to Claude |
 | `badges:` rows `- text \| tone` | sticker badges |
+| `command: Title` rows `- npm install` | shell commands, each with a Copy button |
+| `tree: Title` rows `- src/`, `  - app.ts \| note` | file tree (indent two spaces per level) |
+| `compare: Left \| Right` rows `- point \| point` | two side-by-side cards, green and red for pros and cons |
+| `checklist: Title` rows `- [x] done`, `- [ ] to do` | checklist you can tick, with a done count |
+| `faq: Title` rows `- Question \| Answer` | questions that expand on click |
+| `rating: Title` rows `- Label \| 4.5 \| 5 \| note` | star ratings |
+| `quote: Text \| Who` | pull quote |
+| `links: Title` rows `- Name \| url \| why` | resource links |
 | `[ok: Public]` inside any cell or item | a soft colored pill |
 
 Charts are vector SVG in the desktop app, VS Code and mobile, and colored cells in the terminal. Text sizes, monospace and tabular figures need Claude Code 2.1.317 or newer; older versions get the same cards without them. Table rows and cards light up under the pointer, and the first button of a group is the primary one.
 
 Cards are dark tinted panels with their own text colors, so they read the same on light and dark themes. An ask or a button sends once; the card then shows what it sent.
+
+Claude also gets a short guide for picking components by answer type: comparisons, how-tos, data, explanations, reviews, codebases, plans, status reports, choices and questions. A line inside a `ui` block that Cardify doesn't recognize is shown as text, so nothing Claude writes is lost.
 
 The system prompt is fixed when a thread starts, so start a new session after installing or updating. `/cardify off` shows `ui` blocks as plain markdown instead.
 

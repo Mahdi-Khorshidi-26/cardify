@@ -131,10 +131,11 @@ test('/cardify off hands replies back to the engine', async ($, on) => {
 const F = '`'.repeat(3)
 const SAMPLE = `Intro text.\n${F}ui\ntitle: 🍎 Stocks\ncallout warn: ⚠️ Not live | Background only.\ntable: Ticker | Company\n- AAPL | Apple\n- MSFT | Microsoft\nbars: Growth\n- Apple | 8 | 8%\n- Microsoft | 16 | 16%\nbuttons: Next steps\n- Live prices | Search the web for prices\nask: Which one?\nnonsense line\n${F}\nOutro.`
 
-test('parseUi splits prose from ui blocks and skips unknown lines', () => {
+test('parseUi splits prose from ui blocks and keeps unknown lines as prose', () => {
   const segs = parseUi(SAMPLE)
 
-  expect(segs.map(u => u.kind)).toEqual(['md', 'title', 'callout', 'table', 'bars', 'buttons', 'ask', 'md'])
+  expect(segs.map(u => u.kind)).toEqual(['md', 'title', 'callout', 'table', 'bars', 'buttons', 'ask', 'md', 'md'])
+  expect(segs[7]).toEqual({ kind: 'md', text: 'nonsense line' })
   expect(segs.find(u => u.kind === 'table')).toEqual({
     kind: 'table',
     head: ['Ticker', 'Company'],
@@ -290,4 +291,81 @@ test('charts and the hero draw on every surface', async $ => {
     expect((await ui.find({ type: 'Text', text: /Share/ }))?.text).toContain('Share')
     await ui.unmount()
   }
+})
+
+const MORE = `${F}ui
+command: Install
+- npm install cardify
+tree: Layout
+- src/
+  - app.ts | entry
+  - lib/
+    - util.ts
+- README.md
+compare: Pros | Cons
+- Fast | Young project
+- Small |
+checklist: Launch
+- [x] Write tests
+- [ ] Ship it
+faq: Questions
+- Is it free? | Yes, MIT.
+rating: Reviews
+- Speed | 4.5 | 5 | quick
+quote: Simplicity is prerequisite for reliability. | Dijkstra
+links: Read more
+- OpenUI | https://github.com/thesysdev/openui | the idea
+${F}`
+
+test('the new components parse, tree depth from indentation', () => {
+  const segs = parseUi(MORE)
+
+  expect(segs.map(u => u.kind)).toEqual(['command', 'tree', 'compare', 'checklist', 'faq', 'rating', 'quote', 'links'])
+  const tree = segs[1]
+  expect(tree?.kind === 'tree' && tree.items.map(i => [i.name, i.depth])).toEqual([['src/', 0], ['app.ts', 1], ['lib/', 1], ['util.ts', 2], ['README.md', 0]])
+  const check = segs[3]
+  expect(check?.kind === 'checklist' && check.items).toEqual([{ text: 'Write tests', done: true }, { text: 'Ship it', done: false }])
+  expect(toMarkdown(segs)).toContain('- [x] Write tests')
+})
+
+test('the new components draw on every surface', async $ => {
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...reply(MORE), surface })
+
+    expect((await ui.find({ type: 'Text', text: /npm install cardify/ }))?.text).toContain('npm install cardify')
+    expect((await ui.find({ type: 'Text', text: /util\.ts/ }))?.text).toContain('util.ts')
+    expect((await ui.find({ type: 'Text', text: /Dijkstra/ }))?.text).toContain('Dijkstra')
+    expect((await ui.find({ type: 'Text', text: /★/ }))?.text).toContain('★★★★★')
+    await ui.unmount()
+  }
+})
+
+test('a faq opens on press and a checklist item ticks', async $ => {
+  const ui = await $.ui.mount({ ...reply(MORE), surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /MIT/ })).toBeUndefined()
+
+  await ui.press({ key: 'cardify-ui-4-faq-0' })
+  await ui.press({ key: 'cardify-ui-3-check-1' })
+  await ui.unmount()
+
+  const again = await $.ui.mount({ ...reply(MORE), surface: 'desktop' })
+  expect((await again.find({ type: 'Text', text: /MIT/ }))?.text).toContain('MIT')
+  expect((await again.find({ type: 'Text', text: /2\/2/ }))?.text).toContain('2/2')
+  await again.unmount()
+})
+
+test('a command copies its line', async ($, on) => {
+  const copied: string[] = []
+  on('ui.copy', (_, e) => {
+    copied.push(e.text)
+
+    return {} as never
+  })
+  on('ui.toast', () => ({}) as never)
+
+  const ui = await $.ui.mount({ ...reply(MORE), surface: 'desktop' })
+  await ui.press({ key: 'cardify-ui-0-copy-0' })
+  await ui.unmount()
+
+  expect(copied).toEqual(['npm install cardify'])
 })
