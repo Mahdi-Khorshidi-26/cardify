@@ -1,12 +1,50 @@
 # Cardify
 
-Turn Claude's answers into readable cards, tables and lists in a side pane.
+Turn Claude's answers into real UI: cards, tables, charts, stat tiles, buttons and inputs.
 
-Cardify is a [Claude Code](https://claude.com/claude-code) plugin. After each answer it reads the markdown and draws it as colored cards:
+Cardify is a [Claude Code](https://claude.com/claude-code) plugin. Cardify works like [OpenUI](https://github.com/thesysdev/openui): instead of guessing structure from markdown, it teaches Claude a small `ui` block language and draws what Claude writes as real components.
 
 ![Cardify preview](docs/preview.svg)
 
 *Illustrative mockup of the card styles.*
+
+## How it works
+
+1. Cardify adds a short section to Claude's system prompt (only in sessions that draw a screen).
+2. For answers with structure, Claude writes a fenced `ui` block. Prose around it stays normal markdown.
+3. Cardify draws the block as components, inline in the chat and in the `/cardify` pane.
+4. Replies with no `ui` block still get a best-effort card layout from their markdown.
+
+```ui
+title: 🍎 Stock snapshot
+callout warn: ⚠️ Not live data | Background only, not advice.
+stats:
+- Tickers | 3
+table: Ticker | Company | Note
+- AAPL | Apple | Services keep growing
+bars: Revenue growth
+- Apple | 8 | 8%
+- Microsoft | 16 | 16%
+buttons: Next steps
+- Get live prices | Search the web for current prices
+ask: Which stock first?
+```
+
+| Component | Draws |
+|---|---|
+| `title: text` | heading |
+| `callout ok\|warn\|bad\|info\|next: Title \| Body` | colored card with a sticker |
+| `stats:` rows `- Label \| Value \| note` | stat tiles, note green for `+`, red for `-` |
+| `table: A \| B` rows `- a \| b` | striped table with real columns |
+| `bars: Title` rows `- Label \| number \| text` | bar chart |
+| `list:` / `steps:` rows `- item` | bullets / numbered steps |
+| `buttons:` rows `- Label \| prompt` | buttons that send the prompt to Claude |
+| `ask: Question` | text box that sends your answer to Claude |
+| `badges:` rows `- text \| tone` | sticker badges |
+
+The system prompt is fixed when a thread starts, so start a new session after installing or updating. `/cardify off` shows `ui` blocks as plain markdown instead.
+
+## Markdown fallback
 
 | Markdown | Card |
 |---|---|
@@ -55,7 +93,7 @@ claude plugin test .
 
 ## Roadmap
 
-- Real markdown parser
+- Real markdown parser for the fallback
 - Themes
 
 ## License
