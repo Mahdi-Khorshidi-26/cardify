@@ -27,7 +27,8 @@ At the prompt of a Claude Code terminal session:
 From a shell:
 
 ```bash
-claude plugin install cardify --marketplace Mahdi-Khorshidi-26/cardify
+claude plugin marketplace add Mahdi-Khorshidi-26/cardify
+claude plugin install cardify@cardify
 ```
 
 ## Use
