@@ -32,7 +32,7 @@ ask: Which stock first?
 
 | Component | Draws |
 |---|---|
-| `title: text` | hero banner (once per reply; later titles become section headings) |
+| `title: text \| subtitle` | hero banner (once per reply; later titles become section headings) |
 | `section: text` | section heading |
 | `callout ok\|warn\|bad\|info\|next: Title \| Body` | colored card with a sticker |
 | `stats:` rows `- Label \| Value \| note` | stat tiles, note green for `+`, red for `-` |
@@ -41,12 +41,16 @@ ask: Which stock first?
 | `kv: Title` rows `- Key \| Value` | fact sheet |
 | `bars: Title` rows `- Label \| number \| text` | bar chart |
 | `progress: Title` rows `- Label \| percent` | progress meters |
+| `pie: Title` rows `- Label \| number` | donut chart with a legend |
+| `trend: Title` rows `- Label \| 3, 5, 4, 8 \| text` | sparkline per row, green up, red down |
 | `timeline: Title` rows `- When \| What` | timeline |
 | `list:` / `steps:` rows `- item` | bullets / numbered steps |
 | `buttons:` rows `- Label \| prompt` | buttons that send the prompt to Claude |
 | `ask: Question` | text box that sends your answer to Claude |
 | `badges:` rows `- text \| tone` | sticker badges |
 | `[ok: Public]` inside any cell or item | a soft colored pill |
+
+Charts are vector SVG in the desktop app, VS Code and mobile, and colored cells in the terminal. Text sizes, monospace and tabular figures need Claude Code 2.1.317 or newer; older versions get the same cards without them. Table rows and cards light up under the pointer, and the first button of a group is the primary one.
 
 Cards are dark tinted panels with their own text colors, so they read the same on light and dark themes. An ask or a button sends once; the card then shows what it sent.
 

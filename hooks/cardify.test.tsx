@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { group, listChart, parse, parseUi, split, tableChart, toMarkdown, tone, wide } from './register'
+import { barSvg, group, isFancyVersion, listChart, parse, parseUi, pieSvg, sparkText, split, tableChart, toMarkdown, tone, wide } from './register'
 
 test('split colors status words', () => {
   const runs = split('Build passed, deploy FAILED')
@@ -214,7 +214,8 @@ test('the new components draw on every surface', async $ => {
 
     expect((await ui.find({ type: 'Text', text: /Founded/ }))?.text).toContain('Founded')
     expect((await ui.find({ type: 'Text', text: /Public/ }))?.text).toContain('Public')
-    expect((await ui.find({ type: 'Text', text: /40%/ }))?.text).toContain('40%')
+    // Charts are SVG where the surface draws vectors, colored cells on the terminal.
+    expect(await ui.find(surface === 'terminal' ? { type: 'Text', text: /40%/ } : { type: 'Svg' })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -252,4 +253,41 @@ test('a later title and a section draw as headings, not banners', async $ => {
   const ui = await $.ui.mount({ ...reply(`${F}ui\ntitle: Top\nsection: Part one\ntitle: Part two\n${F}`), surface: 'desktop' })
   expect(await ui.findAll({ type: 'Text', text: /▍/ })).toHaveLength(2)
   await ui.unmount()
+})
+
+test('typography props only on engines that take them', () => {
+  expect(isFancyVersion('2.1.287')).toBe(false)
+  expect(isFancyVersion('2.1.317')).toBe(true)
+  expect(isFancyVersion('2.2.0')).toBe(true)
+  expect(isFancyVersion('2.1.320-dev.20261101.t1.sha1')).toBe(true)
+})
+
+test('pie, trend and a title subtitle parse', () => {
+  const segs = parseUi(`${F}ui\ntitle: Top | Subtitle here\npie: Share\n- iOS | 60\n- Android | 40\ntrend: Price\n- AAPL | 1, 3, 2, 5 | $5\n${F}`)
+
+  expect(segs).toEqual([
+    { kind: 'title', text: 'Top', sub: 'Subtitle here' },
+    { kind: 'pie', title: 'Share', items: [{ label: 'iOS', value: 60 }, { label: 'Android', value: 40 }] },
+    { kind: 'trend', title: 'Price', items: [{ label: 'AAPL', values: [1, 3, 2, 5], text: '$5' }] },
+  ])
+})
+
+test('charts render as SVG strings and terminal sparklines', () => {
+  const bar = barSvg([{ label: 'A <b>', frac: 0.5, text: '50%' }])
+  expect(bar.source.startsWith('<svg')).toBe(true)
+  expect(bar.source).toContain('A &lt;b&gt;')
+  expect(pieSvg([1, 1]).source.match(/stroke-dasharray/g)).toHaveLength(2)
+  expect(sparkText([1, 2, 3, 8])).toBe('▁▂▃█')
+})
+
+test('charts and the hero draw on every surface', async $ => {
+  const text = `${F}ui\ntitle: Top | Sub\npie: Share\n- iOS | 60\n- Android | 40\ntrend: Price\n- AAPL | 1, 3, 2, 5 | $5\nbars: Growth\n- A | 10 | 10%\n- B | 20 | 20%\nprogress: Rollout\n- EU | 40\n${F}`
+
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...reply(text), surface })
+
+    expect((await ui.find({ type: 'Text', text: /Sub/ }))?.text).toBe('Sub')
+    expect((await ui.find({ type: 'Text', text: /Share/ }))?.text).toContain('Share')
+    await ui.unmount()
+  }
 })
