@@ -1,0 +1,6 @@
+{
+  "name": "cardify",
+  "description": "Cardify: Claude's answers as cards, tables and badges.",
+  "owner": { "name": "Mahdi Khorshidi" },
+  "plugins": [{ "name": "cardify", "source": "./" }]
+}
