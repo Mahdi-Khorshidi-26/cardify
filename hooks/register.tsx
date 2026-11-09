@@ -129,17 +129,16 @@ export const split = (s: string): { text: string; color?: string; emoji?: string
 // Only redraw replies that have structure; plain prose stays as the surface draws it.
 export const isStructured = (list: Block[]) => list.some(b => b.kind !== 'text')
 
-type Act = 'button' | 'input'
-
-// A section card's tone and behavior come from its heading. The first match wins, so "Not done yet" is a warning.
-const TONES: { re: RegExp; tone: Tone; act?: Act }[] = [
+// A section card's color comes from its heading; the first match wins, so "Not done yet" is a warning.
+// Color only: the fallback never turns text into buttons or fields, so every word stays visible and inert.
+const TONES: { re: RegExp; tone: Tone }[] = [
   { re: /heads-up|warning|caveat|risk|not done|not yet|still open|bug|problem|issue|gap|unverified/i, tone: 'warn' },
-  { re: /question|your answer|reply|tell me|input/i, tone: 'ask', act: 'input' },
-  { re: /option|choose|pick|which|next|todo|to do|steps?|follow/i, tone: 'next', act: 'button' },
+  { re: /question|your answer|reply|tell me|input/i, tone: 'ask' },
+  { re: /option|choose|pick|which|next|todo|to do|steps?|follow/i, tone: 'next' },
   { re: /done|did|fixed|result|change|added|built|works|checks?|summary|what.s in/i, tone: 'ok' },
   { re: /tip|note|info|why|idea|background|context/i, tone: 'info' },
 ]
-export const tone = (title: string): { tone: Tone; act?: Act } => TONES.find(t => t.re.test(title)) ?? { tone: 'note' }
+export const tone = (title: string): { tone: Tone } => TONES.find(t => t.re.test(title)) ?? { tone: 'note' }
 
 type Section = { title?: string; body: Block[] }
 
@@ -292,7 +291,7 @@ const rich = (t: T, s: string, hasBadges: boolean) => {
   const { Text, Link } = t
 
   return s
-    .split(/(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s)]+|\[(?:ok|warn|bad|info|next|ask|note):[^\]]+\])/)
+    .split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|https?:\/\/[^\s)]+|\[(?:ok|warn|bad|info|next|ask|note):[^\]]+\]|~~[^~]+~~|(?<![*\w])\*[^*\s][^*]*\*(?![*\w])|(?<![_\w])_[^_\s][^_]*_(?![_\w]))/)
     .filter(Boolean)
     .flatMap(part => {
       if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
@@ -301,7 +300,20 @@ const rich = (t: T, s: string, hasBadges: boolean) => {
       if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
         return [<Text {...ty(t, { mono: true })} color={C.text} backgroundColor={C.line}>{` ${part.slice(1, -1)} `}</Text>]
       }
+      const md = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(part)
+      if (md) {
+        const [, label = '', href = ''] = md
+
+        // A web link is clickable; a file path keeps its text, and the target when it differs, so nothing is hidden.
+        return /^https?:\/\//.test(href)
+          ? [<Link href={href} label={label} />]
+          : [<Text underline color={TONE.next.color}>{label}</Text>, ...(href === label ? [] : [<Text color={C.dim}>{` (${href})`}</Text>])]
+      }
       if (/^https?:\/\//.test(part)) return [<Link href={part} />]
+      if (part.length > 4 && part.startsWith('~~') && part.endsWith('~~')) return [<Text strikethrough>{part.slice(2, -2)}</Text>]
+      if (part.length > 2 && ((part.startsWith('*') && part.endsWith('*')) || (part.startsWith('_') && part.endsWith('_')))) {
+        return [<Text italic>{part.slice(1, -1)}</Text>]
+      }
 
       const tag = /^\[(\w+):\s*([^\]]+)\]$/.exec(part)
       if (tag) return [pill(t, asTone(tag[1]), (tag[2] ?? '').trim())]
@@ -472,12 +484,30 @@ const grid = (t: T, head: string[], rows: string[][], id: string) => {
   )
 }
 
+// A one-line control holds a short label; a longer one gets a small control and its whole text beside it.
+const LABEL_MAX = 48
+
+const pressRow = (t: T, key: string, label: string, glyph: string, onPress: () => void, extra: { plain?: true; dimColor?: boolean; variant?: 'primary' | 'secondary' } = {}) => {
+  const { Box, Text, Button } = t
+
+  if (wide(plain(label)) <= LABEL_MAX) {
+    return <Button key={key} label={glyph ? `${glyph} ${plain(label)}` : plain(label)} onPress={onPress} {...extra} />
+  }
+
+  return (
+    <Box gap={1} alignItems="flex-start">
+      <Button key={key} label={glyph || 'Ask ↗'} onPress={onPress} {...extra} />
+      <Text color={extra.dimColor ? C.dim : C.text}>{rich(t, label, true)}</Text>
+    </Box>
+  )
+}
+
 const sentNote = ({ Text }: T, said: string) => <Text bold color={TONE.ok.color}>{`✓ Sent: ${said}`}</Text>
 
-type Ctx = { t: T; tn: Tone; act?: Act; io: Io; id: string }
+type Ctx = { t: T; tn: Tone }
 
-const body = (list: Block[], { t, tn, act, io, id }: Ctx) => {
-  const { Box, Text, Button, Input, Y } = t
+const body = (list: Block[], { t, tn }: Ctx) => {
+  const { Box, Text, Y } = t
   const color = TONE[tn].color
 
   const out: (El | null)[] = list.map((b, n) => {
@@ -485,23 +515,6 @@ const body = (list: Block[], { t, tn, act, io, id }: Ctx) => {
       const data = listChart(b.items)
 
       if (data) return chartRows(t, data, color)
-      if (act === 'button') {
-        const done = b.items.map((_, i) => io.sentOf(`${id}-${n}-${i}`)).find(Boolean)
-
-        return done ? sentNote(t, done) : (
-          <Box gap={1} flexWrap="wrap">
-            {b.items.map((item, i) => (
-              <Button
-                key={`${id}-${n}-${i}`}
-                variant={i === 0 ? 'primary' : 'secondary'}
-                label={plain(item)}
-                onPress={() => io.send(`${id}-${n}-${i}`, `Go ahead with: ${plain(item)}`)}
-              />
-            ))}
-          </Box>
-        )
-      }
-
       return (
         <Box flexDirection="column" gap={Y}>
           {b.items.map((item, i) => (
@@ -518,7 +531,7 @@ const body = (list: Block[], { t, tn, act, io, id }: Ctx) => {
 
       return (
         <Box flexDirection="column" gap={Y}>
-          {grid(t, b.head, b.rows, `${id}-${n}`)}
+          {grid(t, b.head, b.rows, `cardify-md-${n}`)}
           {tc ? (
             <Box flexDirection="column" gap={Y}>
               <Text {...ty(t, { size: 'footnote' })} color={C.dim}>{tc.title}</Text>
@@ -539,34 +552,22 @@ const body = (list: Block[], { t, tn, act, io, id }: Ctx) => {
     return <Text color={C.text}>{rich(t, b.text, false)}</Text>
   })
 
-  if (act === 'input' && Input) {
-    const done = io.sentOf(`${id}-ask`)
-
-    out.push(
-      done ? sentNote(t, done) : (
-        <Input key={`${id}-ask`} placeholder="Type your answer" submitLabel="send" onSubmit={v => v.trim() && io.send(`${id}-ask`, v.trim())} />
-      ),
-    )
-  }
-
   return out
 }
 
 // The markdown fallback's drawing: a tinted card per section.
-const draw = (list: Block[], t: T, io: Io) => {
+const draw = (list: Block[], t: T) => {
   const { Box, Y } = t
 
   return (
     <Box flexDirection="column" gap={1}>
       {group(list).map((s, i) => {
-        const id = `cardify-${i}`
-
         if (s.title === undefined) {
-          return <Box flexDirection="column" gap={Y}>{body(s.body, { t, tn: 'note', io, id })}</Box>
+          return <Box key={`cardify-md-intro-${i}`} flexDirection="column" gap={Y}>{body(s.body, { t, tn: 'note' })}</Box>
         }
-        const { tone: tn, act } = tone(s.title)
+        const { tone: tn } = tone(s.title)
 
-        return card(t, tn, `${TONE[tn].icon} ${s.title}`, body(s.body, { t, tn, act, io, id }))
+        return card(t, tn, `${TONE[tn].icon} ${s.title}`, body(s.body, { t, tn }))
       })}
     </Box>
   )
@@ -944,15 +945,12 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
               <Box flexDirection="column" gap={Y}>
                 {heading(u.title)}
                 {done ? sentNote(t, done) : (
-                  <Box gap={1} flexWrap="wrap">
-                    {u.items.map((i, k) => (
-                      <Button
-                        key={`${id}-${k}`}
-                        variant={k === 0 ? 'primary' : 'secondary'}
-                        label={plain(i.label)}
-                        onPress={() => io.send(`${id}-${k}`, i.prompt || `Go ahead with: ${plain(i.label)}`)}
-                      />
-                    ))}
+                  <Box gap={1} flexWrap="wrap" flexDirection={u.items.some(i => wide(plain(i.label)) > LABEL_MAX) ? 'column' : 'row'}>
+                    {u.items.map((i, k) =>
+                      pressRow(t, `${id}-${k}`, i.label, '', () => io.send(`${id}-${k}`, i.prompt || `Go ahead with: ${plain(i.label)}`), {
+                        variant: k === 0 ? 'primary' : 'secondary',
+                      }),
+                    )}
                   </Box>
                 )}
               </Box>
@@ -1070,15 +1068,7 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
             return card(t, 'note', `${u.title}  ${done}/${u.items.length}`, u.items.map((it, k) => {
               const isDone = it.done !== io.isToggled(`${id}-check-${k}`)
 
-              return (
-                <Button
-                  key={`${id}-check-${k}`}
-                  plain
-                  dimColor={isDone}
-                  label={`${isDone ? '✅' : '⬜'} ${plain(it.text)}`}
-                  onPress={() => io.toggle(`${id}-check-${k}`)}
-                />
-              )
+              return pressRow(t, `${id}-check-${k}`, it.text, isDone ? '✅' : '⬜', () => io.toggle(`${id}-check-${k}`), { plain: true, dimColor: isDone })
             }))
           }
           case 'faq':
@@ -1087,7 +1077,7 @@ const drawUi = (segs: Ui[], t: T, io: Io) => {
 
               return (
                 <Box flexDirection="column">
-                  <Button key={`${id}-faq-${k}`} plain label={`${isOpen ? '▾' : '▸'} ${plain(it.q)}`} onPress={() => io.toggle(`${id}-faq-${k}`)} />
+                  {pressRow(t, `${id}-faq-${k}`, it.q, isOpen ? '▾' : '▸', () => io.toggle(`${id}-faq-${k}`), { plain: true })}
                   {isOpen ? (
                     <Box paddingLeft={2}>
                       <Text color={C.soft}>{rich(t, it.a, false)}</Text>
@@ -1159,7 +1149,7 @@ const view = (text: string, t: T, io: Io) => {
 
   const list = parse(text)
 
-  return isStructured(list) ? draw(list, t, io) : undefined
+  return isStructured(list) ? draw(list, t) : undefined
 }
 
 const FENCE = '`'.repeat(3)

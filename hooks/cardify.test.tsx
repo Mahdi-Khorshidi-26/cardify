@@ -83,29 +83,31 @@ test('numeric tables and "label: value" lists become bars', () => {
   expect(listChart(['one', 'two'])).toBeUndefined()
 })
 
-test('next steps are buttons and questions are inputs', () => {
-  expect(tone('Next steps').act).toBe('button')
-  expect(tone('Questions for you').act).toBe('input')
-  expect(tone('Done').act).toBeUndefined()
+const STEP14 = '**Step 14: Check the live site after deploy**\n- Simple version: repeat a short version of Part B on the real site, because live data and settings can differ from staging.\n- What: the "Checks after deploy" list in [docs/hydrogen-2026-10-migration.md](docs/hydrogen-2026-10-migration.md), plus [the guide](https://example.com/guide).\n\n**Questions**\n- Anything *unclear* or ~~old~~?'
+
+test('the markdown fallback only restyles: every word visible, no buttons or fields', async $ => {
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...reply(STEP14), surface })
+
+    expect(await ui.find({ type: 'Button' })).toBeUndefined()
+    expect(await ui.find({ type: 'Input' })).toBeUndefined()
+    expect((await ui.find({ type: 'Text', text: /can differ from staging\./ }))?.text).toContain('can differ from staging.')
+    expect((await ui.find({ type: 'Text', text: /docs\/hydrogen-2026-10-migration\.md/ }))?.text).toContain('docs/hydrogen-2026-10-migration.md')
+    expect(await ui.find({ type: 'Text', text: /\]\(/ })).toBeUndefined()
+    await ui.unmount()
+  }
 })
 
-test('a button sends its step as a prompt and an input sends its text', async ($, on) => {
-  const sent: string[] = []
-  on('prompt.submit', (_, e) => {
-    sent.push(e.text)
+test('a long button label, faq question or checklist item is shown in full', async $ => {
+  const long = 'Repeat a short version of Part B on the real site, because live data and settings can differ'
+  const text = `${F}ui\nbuttons: Next\n- ${long} | do it\n- Short one\nfaq: Q\n- ${long}? | A\nchecklist: C\n- [ ] ${long}\n${F}`
+  const ui = await $.ui.mount({ ...reply(text), surface: 'desktop' })
 
-    return {} as never
-  })
-
-  const steps = await $.ui.mount({ ...reply('**Next steps**\n- Push the fix'), surface: 'desktop' })
-  await steps.press({ key: 'cardify-0-0-0' })
-  await steps.unmount()
-
-  const ask = await $.ui.mount({ ...reply('**Questions**\n- Which one?'), surface: 'desktop' })
-  await ask.input({ plugin: 'cardify', key: 'cardify-0-ask', text: 'the first' })
-  await ask.unmount()
-
-  expect(sent).toEqual(['Go ahead with: Push the fix', 'the first'])
+  // The long text sits in plain text (nested runs count twice), never squeezed into a one-line button.
+  expect((await ui.findAll({ type: 'Text', text: /can differ/ })).length).toBeGreaterThanOrEqual(3)
+  expect(await ui.find({ type: 'Button', text: /can differ/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: /Short one/ })).toBeDefined()
+  await ui.unmount()
 })
 
 test('/cardify off hands replies back to the engine', async ($, on) => {

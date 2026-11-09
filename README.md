@@ -13,7 +13,7 @@ Cardify is a [Claude Code](https://claude.com/claude-code) plugin. Cardify works
 1. Cardify adds a short section to Claude's system prompt (only in sessions that draw a screen).
 2. For answers with structure, Claude writes a fenced `ui` block. Prose around it stays normal markdown.
 3. Cardify draws the block as components, inline in the chat and in the `/cardify` pane.
-4. Replies with no `ui` block still get a best-effort card layout from their markdown.
+4. Replies with no `ui` block still get a card layout from their markdown. That fallback only restyles: every word stays visible, links stay links, and it never turns your text into buttons or fields.
 
 ```ui
 title: 🍎 Stock snapshot
@@ -45,7 +45,7 @@ ask: Which stock first?
 | `trend: Title` rows `- Label \| 3, 5, 4, 8 \| text` | sparkline per row, green up, red down |
 | `timeline: Title` rows `- When \| What` | timeline |
 | `list:` / `steps:` rows `- item` | bullets / numbered steps |
-| `buttons:` rows `- Label \| prompt` | buttons that send the prompt to Claude |
+| `buttons:` rows `- Label \| prompt` | buttons that send the prompt to Claude (a long label is shown in full next to a small button) |
 | `ask: Question` | text box that sends your answer to Claude |
 | `badges:` rows `- text \| tone` | sticker badges |
 | `command: Title` rows `- npm install` | shell commands, each with a Copy button |
